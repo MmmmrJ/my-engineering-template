@@ -7,19 +7,19 @@
 
 以下请求默认不启动团队：普通问答、概念解释、状态查询、仅讨论想法、只读检查或评审。用户显式输入 `$team-orchestrator`、`/team-orchestrator`、`启动需求：` 或明确要求使用团队工作流时，始终启动。
 
-采用端到端自动模式：完成需求澄清、角色选择、实现和测试，只在不可逆操作、权限升级、会改变产品方向的重大歧义或真实阻塞时暂停询问。
+采用“方案先行、用户确认、再实施验收”模式：先完成产品/UI/技术设计与实施计划并提交用户审核；在用户明确确认最新方案版本前，禁止修改生产代码、迁移、运行配置或测试实现。用户不满意时按反馈修订并重复审核，确认后才进入开发，开发完成后才执行最终验收。
 
-## 固定角色
+## 固定角色与共享 Skill
 
-| Agent 类型 | 角色 | 责任范围 |
-|---|---|---|
-| `product_manager` | 产品经理 | 需求、范围、优先级、验收标准、风险与依赖 |
-| `ui_designer` | UI设计 | 用户流程、页面/组件状态、响应式、无障碍、设计规范 |
-| `frontend_engineer` | 前端开发 | 客户端实现、接口接入和前端测试 |
-| `backend_engineer` | 后端开发 | API、数据、业务逻辑、迁移和后端测试 |
-| `qa_engineer` | 测试工程师 | 测试计划、自动化测试、回归、缺陷和验收 |
+| Codex 类型 | Cursor 类型 | 角色 | 默认共享 Skill |
+|---|---|---|---|
+| `product_manager` | `product-manager` | 产品经理 | `stock-learn-product-management` |
+| `ui_designer` | `ui-designer` | UI设计 | `stock-learn-ui-design` |
+| `frontend_engineer` | `frontend-engineer` | 前端开发 | `stock-learn-frontend-engineering` |
+| `backend_engineer` | `backend-engineer` | 后端开发 | `stock-learn-backend-engineering` |
+| `qa_engineer` | `qa-engineer` | 测试工程师 | `stock-learn-quality-engineering` |
 
-Codex 角色定义位于 `.codex/agents/`；Cursor 角色定义位于 `.cursor/agents/`。按需选择角色，不得为形式启动全部角色。
+Codex 角色定义位于 `.codex/agents/`；Cursor 角色定义位于 `.cursor/agents/`；跨平台共享 skills 位于 `.agents/skills/`。委派时必须让角色加载自己的默认共享 skill。平台插件和个人 skills 只能按 `.codex/agents/` 中的触发条件作为 Codex 增强，不能成为 Cursor 的硬依赖。完整映射见 `docs/team/SKILL_MATRIX.md`。按需选择角色，不得为形式启动全部角色。
 
 ## 不可违反的协作约束
 
@@ -29,6 +29,9 @@ Codex 角色定义位于 `.codex/agents/`；Cursor 角色定义位于 `.cursor/a
 - 只有父 Agent 可以修改 `docs/team/STATUS.md`；subagent 只返回状态行。
 - 多个角色可能修改同一文件时，改为顺序执行并明确唯一所有者。
 - 保留用户和其他角色的无关改动，不得静默改变已确认范围或契约。
+- 可选增强能力不可用时回退到对应共享 skill；不得因为缺少插件、个人 skill 或平台连接而阻塞基础工作。
+- 用户确认是硬门禁：不得从沉默、超时、模糊回复或历史方案推断同意；开发委派必须携带明确的“用户已确认：方案 Vn”记录。
+- 已确认方案若发生范围、交互、契约、数据模型或验收标准变化，必须生成新版本并返回用户审核；仅修复不改变已确认行为的实现缺陷可直接返工并由 QA 复验。
 <!-- team-orchestrator:end -->
 
 ## 项目状态
