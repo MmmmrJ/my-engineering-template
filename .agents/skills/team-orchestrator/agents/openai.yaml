@@ -1,0 +1,7 @@
+interface:
+  display_name: "Team Orchestrator"
+  short_description: "Orchestrate product-to-test delivery with five agents"
+  default_prompt: "Use $team-orchestrator to turn this requirement into an end-to-end multi-agent delivery."
+
+policy:
+  allow_implicit_invocation: true
