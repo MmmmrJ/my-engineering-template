@@ -1,0 +1,4 @@
+interface:
+  display_name: "Quality Engineering"
+  short_description: "Plan and execute risk-based product testing"
+  default_prompt: "Use $quality-engineering to test this change and report release evidence."

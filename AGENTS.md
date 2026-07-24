@@ -1,4 +1,34 @@
-# Stock Learn Agent 路由规则
+# Harness Engineering Agent 路由规则
+
+本仓库是面向 Codex 与 Cursor 的多人角色交付 harness 模版。克隆后替换业务上下文，即可按「方案 → 用户确认 → 实现 → 验收」搭建自己的系统。
+
+## 如何用于新业务
+
+- 保留 `.agents/`、`.codex/`、`.cursor/`、`docs/`、`scripts/` 与下方 `team-orchestrator` 路由区块。
+- 空业务目录：`apps/frontend/`、`apps/backend/`、`packages/contracts/`；自行搭建技术栈后填写 `docs/ARCHITECTURE.md` 与 `scripts/project-checks.env`。
+- 接到已有仓库：`./scripts/install-harness.sh --merge <target>`（不复制 apps）；棕地扫描用 `$onboard-repository`。
+- 启用 git hooks：`git config core.hooksPath .githooks`。Codex 若提示则执行一次 `/hooks` trust。
+- 完整映射见 `docs/team/SKILL_MATRIX.md`；原则见 `docs/HARNESS.md`；流程见 `docs/WORKFLOW.md`。
+
+## 文档地图
+
+- `docs/README.md` — 文档总览
+- `docs/plans/active/` — 多会话 durable 计划
+- `docs/team/STATUS.md` — 五角色持久状态
+- `docs/ARCHITECTURE.md` — 分层与禁止依赖（业务仓填写）
+
+## 命令占位（业务仓填写）
+
+```bash
+# 写入 scripts/project-checks.env
+# PRECOMMIT_CMD=
+# TYPECHECK_CMD=
+# LINT_CMD=
+# TEST_CMD=
+# 完成前运行: ./scripts/verify.sh
+```
+
+Never-touch：`.env` 及密钥文件不得写入或 `git add`（由 `scripts/guard-bash.sh` 强制）。
 
 <!-- team-orchestrator:start -->
 ## 自动团队路由
@@ -7,17 +37,17 @@
 
 以下请求默认不启动团队：普通问答、概念解释、状态查询、仅讨论想法、只读检查或评审。用户显式输入 `$team-orchestrator`、`/team-orchestrator`、`启动需求：` 或明确要求使用团队工作流时，始终启动。
 
-采用“方案先行、用户确认、再实施验收”模式：先完成产品/UI/技术设计与实施计划并提交用户审核；在用户明确确认最新方案版本前，禁止修改生产代码、迁移、运行配置或测试实现。用户不满意时按反馈修订并重复审核，确认后才进入开发，开发完成后才执行最终验收。
+采用“方案先行、用户确认、再实施验收”模式：先完成产品/UI/技术设计与实施计划并提交用户审核；在用户明确确认最新方案版本前，禁止修改生产代码、迁移、运行配置或测试实现。用户不满意时按反馈修订并重复审核，确认后才进入开发，开发完成后才执行最终验收。多会话协调型工作同时在 `docs/plans/active/` 落盘 exec-plan。
 
 ## 固定角色与共享 Skill
 
 | Codex 类型 | Cursor 类型 | 角色 | 默认共享 Skill |
 |---|---|---|---|
-| `product_manager` | `product-manager` | 产品经理 | `stock-learn-product-management` |
-| `ui_designer` | `ui-designer` | UI设计 | `stock-learn-ui-design` |
-| `frontend_engineer` | `frontend-engineer` | 前端开发 | `stock-learn-frontend-engineering` |
-| `backend_engineer` | `backend-engineer` | 后端开发 | `stock-learn-backend-engineering` |
-| `qa_engineer` | `qa-engineer` | 测试工程师 | `stock-learn-quality-engineering` |
+| `product_manager` | `product-manager` | 产品经理 | `product-management` |
+| `ui_designer` | `ui-designer` | UI设计 | `ui-design` |
+| `frontend_engineer` | `frontend-engineer` | 前端开发 | `frontend-engineering` |
+| `backend_engineer` | `backend-engineer` | 后端开发 | `backend-engineering` |
+| `qa_engineer` | `qa-engineer` | 测试工程师 | `quality-engineering` |
 
 Codex 角色定义位于 `.codex/agents/`；Cursor 角色定义位于 `.cursor/agents/`；跨平台共享 skills 位于 `.agents/skills/`。委派时必须让角色加载自己的默认共享 skill。平台插件和个人 skills 只能按 `.codex/agents/` 中的触发条件作为 Codex 增强，不能成为 Cursor 的硬依赖。完整映射见 `docs/team/SKILL_MATRIX.md`。按需选择角色，不得为形式启动全部角色。
 

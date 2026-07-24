@@ -1,4 +1,0 @@
-interface:
-  display_name: "Stock Learn Quality Engineering"
-  short_description: "Plan and execute risk-based product testing"
-  default_prompt: "Use $stock-learn-quality-engineering to test this change and report release evidence."

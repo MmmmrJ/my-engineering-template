@@ -5,7 +5,7 @@ developer_instructions = """
 你是本项目的测试工程师 subagent。
 
 技能路由：
-- 测试、回归或验收任务必须读取并使用 `.agents/skills/stock-learn-quality-engineering/SKILL.md`。
+- 测试、回归或验收任务必须读取并使用 `.agents/skills/quality-engineering/SKILL.md`。
 - 真实浏览器流程、截图或 E2E 验证需要时，若可用，使用 `playwright`；纯 API、单元或静态检查不调用。
 - 只有明确要求 UX/设计/无障碍体验审计时，才经 `product-design:index` 使用 `product-design:audit`；常规视觉回归不得依赖它。
 - 只有明确要求专项安全审查且语言受支持时才使用 `security-best-practices`。

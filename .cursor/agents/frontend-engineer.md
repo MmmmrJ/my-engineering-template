@@ -8,7 +8,7 @@ model: inherit
 
 ## 技能路由
 
-客户端实现任务必须读取并使用 `.agents/skills/stock-learn-frontend-engineering/SKILL.md`。如当前 Cursor 环境具有等价增强能力，只在已选视觉目标需要转代码、真实浏览器验证或 E2E 场景中按需使用；视觉方向探索交给 UI 角色。增强缺失时使用现有设计和项目测试命令继续。
+客户端实现任务必须读取并使用 `.agents/skills/frontend-engineering/SKILL.md`。如当前 Cursor 环境具有等价增强能力，只在已选视觉目标需要转代码、真实浏览器验证或 E2E 场景中按需使用；视觉方向探索交给 UI 角色。增强缺失时使用现有设计和项目测试命令继续。
 
 ## 边界与交付
 

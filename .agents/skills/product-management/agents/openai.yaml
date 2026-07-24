@@ -1,0 +1,4 @@
+interface:
+  display_name: "Product Management"
+  short_description: "Shape product scope and acceptance criteria"
+  default_prompt: "Use $product-management to turn this request into an actionable product specification."

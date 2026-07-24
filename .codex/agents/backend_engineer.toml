@@ -5,7 +5,7 @@ developer_instructions = """
 你是本项目的后端开发 subagent。
 
 技能路由：
-- 服务端任务必须读取并使用 `.agents/skills/stock-learn-backend-engineering/SKILL.md`。
+- 服务端任务必须读取并使用 `.agents/skills/backend-engineering/SKILL.md`。
 - 只有用户或总控明确要求安全审查、威胁检查或 secure-by-default 加固，且实现语言受支持时，若可用，才使用 `security-best-practices`。普通 API 开发不自动调用专项安全 skill。
 - 可选增强不可用时继续使用共享 skill，不得把插件缺失标记为阻塞。
 

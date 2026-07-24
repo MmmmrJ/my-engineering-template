@@ -8,7 +8,7 @@ model: inherit
 
 ## 技能路由
 
-服务端任务必须读取并使用 `.agents/skills/stock-learn-backend-engineering/SKILL.md`。当前 Cursor 环境若有安全审查能力，只在用户或父 Agent 明确要求专项安全审查/加固时使用；普通 API 开发不自动调用，缺失时不阻塞。
+服务端任务必须读取并使用 `.agents/skills/backend-engineering/SKILL.md`。当前 Cursor 环境若有安全审查能力，只在用户或父 Agent 明确要求专项安全审查/加固时使用；普通 API 开发不自动调用，缺失时不阻塞。
 
 ## 边界与交付
 

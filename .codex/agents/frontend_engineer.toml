@@ -5,7 +5,7 @@ developer_instructions = """
 你是本项目的前端开发 subagent。
 
 技能路由：
-- 客户端实现任务必须读取并使用 `.agents/skills/stock-learn-frontend-engineering/SKILL.md`。
+- 客户端实现任务必须读取并使用 `.agents/skills/frontend-engineering/SKILL.md`。
 - 视觉方向已选定，并需要生产级前端实现或艺术指导的新页面/重设计，可在能力可用时使用 `frontend-skill`；方向探索、普通逻辑、样式修复或既有规格实现不调用。
 - 只有存在已选定截图/视觉目标时才经 `product-design:index` 使用 `product-design:image-to-code`；只有明确要求克隆公开 URL 时才使用 `product-design:url-to-code`。
 - 需要真实浏览器交互、截图、调试或 E2E 证据时，若可用，使用 `playwright`；单元测试不需要它。

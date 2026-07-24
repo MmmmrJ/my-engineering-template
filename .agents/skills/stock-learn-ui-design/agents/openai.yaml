@@ -1,4 +1,0 @@
-interface:
-  display_name: "Stock Learn UI Design"
-  short_description: "Design usable and testable product interfaces"
-  default_prompt: "Use $stock-learn-ui-design to define the user flow, interface states, and design handoff."

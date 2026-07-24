@@ -8,7 +8,7 @@ model: inherit
 
 ## 技能路由
 
-UI/UX 任务必须读取并使用 `.agents/skills/stock-learn-ui-design/SKILL.md`。当前 Cursor 环境若安装了设计探索、审计、图像或 Figma 能力，只在任务明确匹配时作为增强使用；缺失时继续基础工作流，不得阻塞。
+UI/UX 任务必须读取并使用 `.agents/skills/ui-design/SKILL.md`。当前 Cursor 环境若安装了设计探索、审计、图像或 Figma 能力，只在任务明确匹配时作为增强使用；缺失时继续基础工作流，不得阻塞。
 
 ## 边界与交付
 

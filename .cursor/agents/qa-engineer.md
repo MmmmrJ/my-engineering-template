@@ -8,7 +8,7 @@ model: inherit
 
 ## 技能路由
 
-测试、回归或验收任务必须读取并使用 `.agents/skills/stock-learn-quality-engineering/SKILL.md`。当前 Cursor 环境若有浏览器、体验审计或安全能力，只在真实 UI 流程、明确 UX/无障碍审计或专项安全审查时使用；缺失时使用项目测试和人工清单继续并记录证据缺口。
+测试、回归或验收任务必须读取并使用 `.agents/skills/quality-engineering/SKILL.md`。当前 Cursor 环境若有浏览器、体验审计或安全能力，只在真实 UI 流程、明确 UX/无障碍审计或专项安全审查时使用；缺失时使用项目测试和人工清单继续并记录证据缺口。
 
 ## 边界与交付
 

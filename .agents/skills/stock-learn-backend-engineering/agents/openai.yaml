@@ -1,4 +1,0 @@
-interface:
-  display_name: "Stock Learn Backend Engineering"
-  short_description: "Build reliable APIs and domain behavior"
-  default_prompt: "Use $stock-learn-backend-engineering to implement and verify this backend change."

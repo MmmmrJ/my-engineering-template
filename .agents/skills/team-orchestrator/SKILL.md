@@ -27,11 +27,11 @@ description: "Orchestrate approval-gated product delivery across product managem
 
 | Codex / Cursor 类型 | 默认共享 Skill | 适用任务 | 默认写入边界 |
 |---|---|---|---|
-| `product_manager` / `product-manager` | `stock-learn-product-management` | 需求、范围、优先级、验收标准、风险与依赖 | 产品和需求文档 |
-| `ui_designer` / `ui-designer` | `stock-learn-ui-design` | 用户流程、页面/组件状态、响应式、无障碍、设计规范 | UI 文档和设计资产 |
-| `frontend_engineer` / `frontend-engineer` | `stock-learn-frontend-engineering` | 客户端实现、接口接入、前端测试 | 前端代码及相关测试 |
-| `backend_engineer` / `backend-engineer` | `stock-learn-backend-engineering` | API、数据、业务逻辑、迁移、后端测试 | 后端代码及相关测试 |
-| `qa_engineer` / `qa-engineer` | `stock-learn-quality-engineering` | 测试计划、自动化测试、回归和验收 | 测试、夹具和测试文档 |
+| `product_manager` / `product-manager` | `product-management` | 需求、范围、优先级、验收标准、风险与依赖 | 产品和需求文档 |
+| `ui_designer` / `ui-designer` | `ui-design` | 用户流程、页面/组件状态、响应式、无障碍、设计规范 | UI 文档和设计资产 |
+| `frontend_engineer` / `frontend-engineer` | `frontend-engineering` | 客户端实现、接口接入、前端测试 | 前端代码及相关测试 |
+| `backend_engineer` / `backend-engineer` | `backend-engineering` | API、数据、业务逻辑、迁移、后端测试 | 后端代码及相关测试 |
+| `qa_engineer` / `qa-engineer` | `quality-engineering` | 测试计划、自动化测试、回归和验收 | 测试、夹具和测试文档 |
 
 委派时把所选共享 skill 的路径写进提示，要求 subagent 完整读取后执行。再根据 `docs/team/SKILL_MATRIX.md` 选择平台增强：只在能力存在且触发条件满足时使用；增强缺失时回退共享 skill，不得阻塞或扩大角色边界。Cursor 委派中不得注入 Codex plugin URI、Codex 专属 skill 名称或本机绝对路径。
 
@@ -119,4 +119,4 @@ description: "Orchestrate approval-gated product delivery across product managem
 
 ## 移植到其他项目
 
-由父 Agent 执行迁移并写入目标项目的状态文件；subagent 只辅助检查或返回建议。复制整个 `.agents/skills/` 中的团队 skills、`.codex/agents`、`.cursor/agents`、`docs/team/SKILL_MATRIX.md` 和 `docs/team/STATUS.md`。不要覆盖目标项目已有的 `AGENTS.md`；只合并 `team-orchestrator:start` 与 `team-orchestrator:end` 标记之间的路由区块。重置状态表为五个角色 `待命`，然后在 Codex 和 Cursor 中分别启动新任务验证发现、角色名称映射与自动触发。
+由父 Agent 执行迁移并写入目标项目的状态文件；subagent 只辅助检查或返回建议。优先使用 `scripts/install-harness.sh --merge <target>`；不要覆盖目标项目已有的 `AGENTS.md`，只合并 `team-orchestrator:start` 与 `team-orchestrator:end` 标记之间的路由区块。棕地仓库先用 `onboard-repository` 产出提案并经用户确认。重置状态表为五个角色 `待命`，然后在 Codex 和 Cursor 中分别启动新任务验证发现、角色名称映射与自动触发。运行 `./scripts/doctor.sh` 做安装后体检。

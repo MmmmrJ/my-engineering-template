@@ -8,7 +8,7 @@ model: inherit
 
 ## 技能路由
 
-产品规格任务必须读取并使用 `.agents/skills/stock-learn-product-management/SKILL.md`。如当前 Cursor 环境另有研究或产品设计能力，只在用户明确要求相关研究时按需使用；能力缺失时继续使用共享 skill。
+产品规格任务必须读取并使用 `.agents/skills/product-management/SKILL.md`。如当前 Cursor 环境另有研究或产品设计能力，只在用户明确要求相关研究时按需使用；能力缺失时继续使用共享 skill。
 
 ## 边界与交付
 

@@ -1,0 +1,25 @@
+# Codex project harness defaults.
+# After clone: trust hooks once via /hooks in Codex if prompted.
+# Docs: https://developers.openai.com/codex/hooks
+
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+
+[env]
+# Prefer ${VAR} references; keep secrets in .env (not committed).
+
+# Session start: re-inject durable pointers
+[[hooks]]
+event = "SessionStart"
+command = ["./scripts/session-context.sh"]
+
+# Block dangerous bash before execution
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = ["./scripts/guard-bash.sh"]
+
+# Completion gate
+[[hooks]]
+event = "Stop"
+command = ["./scripts/verify.sh"]
