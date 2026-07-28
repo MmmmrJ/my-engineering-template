@@ -1,6 +1,6 @@
 # Exec Plan: Harness CI 与 PowerShell Guard V2
 
-- 状态：blocked
+- 状态：in_progress
 - 创建：2026-07-28
 - 负责人：父 Agent
 - 关联方案：方案 V2
@@ -21,14 +21,14 @@
 |---|---|---|---|---|
 | 1 | 定义最小 PowerShell 拦截规则与例外 | 后端开发 | completed | 仅拦截广域目标，不阻止项目内受控删除 |
 | 2 | 加入 Windows 字符串、stdin JSON 与回归用例 | 测试工程师 | completed | 在所有 CI 平台运行 |
-| 3 | 运行本地验证并提交、推送当前分支 | 父 Agent | blocked | 已提交 `86dec77`；推送到指定 GitHub 远端需要用户明确授权 |
-| 4 | 监控 GitHub Actions 六组合并记录结果 | 测试工程师 | pending | 任一失败即回归修复后重跑 |
+| 3 | 运行本地验证并提交、推送当前分支 | 父 Agent | in_progress | 用户已授权；首轮 Actions 发现 Node 24 不接受目录测试入口，正在改为原生 Node 测试发现器后重跑 |
+| 4 | 监控 GitHub Actions 六组合并记录结果 | 测试工程师 | in_progress | 首轮 run `30321120776` 的六个 job 均在 `npm test` 失败，修复后重新验证 |
 
 ## 验证清单
 
-- [ ] `npm test`
-- [ ] `node scripts/harness/cli.mjs doctor --strict`
-- [ ] `node scripts/harness/cli.mjs verify`
+- [x] `npm test`
+- [x] `node scripts/harness/cli.mjs doctor --strict`
+- [x] `node scripts/harness/cli.mjs verify`
 - [ ] GitHub Actions: Windows/macOS/Linux × Node 20/24 全绿
 
 ## 完成标准
@@ -39,3 +39,4 @@
 ## 阻塞记录
 
 - 2026-07-28：本地沙箱安全策略拒绝将提交 `86dec77` 推送到 `https://github.com/MmmmrJ/my-subagent.git`，因为缺少针对该远端与代码载荷的明确用户授权。解除条件：用户明确授权此推送。
+- 2026-07-28：用户已授权推送；首轮 GitHub Actions run `30321120776` 已启动并暴露 Node 24 的目录测试入口兼容性问题。该问题不改变 V2 的既定行为，正在以跨平台 Node 测试发现器修复。
