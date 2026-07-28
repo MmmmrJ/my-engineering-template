@@ -24,6 +24,13 @@
 - `onboard-repository` 默认只读；未确认提案不得覆盖 `AGENTS.md` 或业务代码。
 - 所有增强都继承角色原有写入边界，不能授权 subagent 生成下级 agent 或修改 `docs/team/STATUS.md`。
 
+## 页面与交互设计交付门禁
+
+- 新增或改变页面、用户流程、交互、响应式布局或视觉设计时，UI 角色必须创建 `docs/design/<feature>/design.md`，并将本地原型图放入同目录 `prototypes/`。Figma 等外部链接只能作为补充。
+- 前端角色必须在实现前阅读该 `design.md` 与原型图，并运行 `node scripts/harness/cli.mjs validate-design <design-directory>`；缺失或校验失败时不得自行补猜视觉/交互细节，应交回父 Agent。
+- QA 必须以该设计目录作为 UI 验收基线，检查关键页面、状态、交互、响应式与无障碍；实现偏离设计时按缺陷或方案变更处理。
+- 不涉及用户可见 UI 的需求，Feature Spec 必须显式标记 `设计交付：not-applicable` 并说明原因。
+
 ## 用户确认门禁
 
 - 每次团队工作流先产出带版本号的产品、UI、技术实施与测试方案；父 Agent 直接展示完整方案并等待用户确认。

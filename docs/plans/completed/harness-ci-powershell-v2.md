@@ -24,23 +24,6 @@
 | 3 | 运行本地验证并提交、推送当前分支 | 父 Agent | completed | 用户已授权；以 `908ab7c` 修复 Node 24 目录测试入口兼容性并推送 |
 | 4 | 监控 GitHub Actions 六组合并记录结果 | 测试工程师 | completed | run `30321320339` 成功，Windows/macOS/Linux × Node 20/24 六个 job 均通过 |
 
-## 验证清单
-
-- [x] `npm test`
-- [x] `node scripts/harness/cli.mjs doctor --strict`
-- [x] `node scripts/harness/cli.mjs verify`
-- [x] GitHub Actions: Windows/macOS/Linux × Node 20/24 全绿（[run 30321320339](https://github.com/MmmmrJ/my-harness/actions/runs/30321320339)）
-
-## 完成标准
-
-- 广域 PowerShell 危险命令被稳定拦截，正常项目目录删除不被误拦截。
-- GitHub Actions 六个 job 均通过，并将 run URL 与结论记录在本计划。
-
-## 阻塞记录
-
-- 2026-07-28：本地沙箱安全策略拒绝将提交 `86dec77` 推送到 `https://github.com/MmmmrJ/my-subagent.git`，因为缺少针对该远端与代码载荷的明确用户授权。解除条件：用户明确授权此推送。
-- 2026-07-28：用户已授权推送；首轮 GitHub Actions run `30321120776` 已启动并暴露 Node 24 的目录测试入口兼容性问题。该问题不改变 V2 的既定行为，正在以跨平台 Node 测试发现器修复。
-
 ## 验收结果
 
 - GitHub Actions [run 30321320339](https://github.com/MmmmrJ/my-harness/actions/runs/30321320339)：成功；Windows、macOS、Linux 各自的 Node 20 与 Node 24 job 共六个全部通过。

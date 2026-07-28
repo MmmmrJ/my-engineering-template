@@ -66,6 +66,8 @@ node scripts/harness/cli.mjs install --dry-run --merge /path/to/your-app
 
 新功能从 [feature-spec 模板](docs/product/templates/feature-spec.md) 开始；确认后的执行计划存入 `docs/plans/active/`，完成后归档。运行 `node scripts/harness/cli.mjs validate-spec <file>` 可校验最低规格结构。
 
+新增或改变页面、用户流程、交互、响应式布局或视觉设计时，必须额外保存 `docs/design/<feature>/design.md` 和 `prototypes/` 下的本地原型图。前端实现前及 QA 验收前运行 `node scripts/harness/cli.mjs validate-design docs/design/<feature>`。
+
 ## 最小验收清单
 
 - [ ] `node scripts/harness/cli.mjs doctor --strict` 通过

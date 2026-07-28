@@ -72,7 +72,7 @@ description: "Orchestrate approval-gated product delivery across product managem
 按需委派产品、UI、前端、后端和 QA 进行方案工作，并明确标注 `planning_only=true` 和 `方案阶段：未获用户确认，禁止实施`。父 Agent 收敛为带版本号的 `方案 Vn`，至少直接向用户呈现：
 
 - 目标、范围、非目标和关键假设。
-- 用户流程、页面/组件状态或不涉及 UI 的明确说明。
+- 用户流程、页面/组件状态；若新增或改变页面、交互、响应式或视觉设计，必须附 `docs/design/<feature>/design.md` 与本地原型图，或明确说明不涉及 UI。
 - API、数据、兼容、迁移和回滚设计，或不涉及后端的明确说明。
 - 前后端实施步骤、文件影响、依赖顺序和责任角色。
 - 测试计划、验收标准、风险和待决项。
@@ -91,6 +91,8 @@ description: "Orchestrate approval-gated product delivery across product managem
 ### 6. 分批实施
 
 每个实现委派提示都写明：`用户已确认：方案 Vn`、确认范围、目标、依赖、默认共享 skill 路径、允许和禁止修改的路径、预期交付物、必须运行的验证、完成标准、可选平台增强及其触发条件，以及最终状态行格式。缺少明确确认记录时，前端、后端和 QA 不得执行实现或最终验收。启动后立即把该角色更新为 `进行中`。
+
+涉及页面、用户流程、交互、响应式或视觉设计时，委派 UI 角色创建 `docs/design/<feature>/design.md` 与 `prototypes/` 下的本地原型图；委派前端时必须给出设计目录并要求先运行 `validate-design`；委派 QA 时必须把设计目录作为视觉和交互验收基线。Feature Spec 如确实不涉及 UI，必须明确标注 `设计交付：not-applicable`。
 
 优先按以下波次推进：
 

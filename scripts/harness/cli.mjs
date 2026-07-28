@@ -16,6 +16,8 @@ const CLI_FILE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(CLI_FILE), '..', '..');
 const COMMAND_NAMES = ['precommit', 'typecheck', 'lint', 'test'];
 const REQUIRED_SPEC_HEADINGS = ['## 目标', '## 范围', '## 非目标', '## 验收标准', '## 实施与验证关联'];
+const REQUIRED_DESIGN_HEADINGS = ['## 原型图清单', '## 页面结构与视觉规范', '## 交互流程与状态', '## 响应式与无障碍', '## 实施与验收关联'];
+const PROTOTYPE_EXTENSIONS = new Set(['.png', '.webp', '.jpg', '.jpeg', '.svg']);
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next']);
 
 function fail(message, code = 1) {
@@ -128,6 +130,8 @@ function requiredFiles() {
     'docs/WORKFLOW.md',
     'docs/ARCHITECTURE.md',
     'docs/product/templates/feature-spec.md',
+    'docs/design/README.md',
+    'docs/design/templates/design.md',
     'docs/team/STATUS.md',
     'docs/team/SKILL_MATRIX.md',
     'docs/templates/exec-plan.md',
@@ -332,7 +336,7 @@ function managedFiles(root = ROOT) {
     '.codex/config.toml', '.cursor/hooks.json', '.githooks/pre-commit', '.githooks/pre-push',
     'docs/README.md', 'docs/HARNESS.md', 'docs/WORKFLOW.md', 'docs/ARCHITECTURE.md',
     'docs/templates/exec-plan.md', 'docs/team/STATUS.md', 'docs/team/SKILL_MATRIX.md',
-    'docs/product/templates/feature-spec.md',
+    'docs/product/templates/feature-spec.md', 'docs/design/README.md', 'docs/design/templates/design.md',
   ];
   const dirs = ['.agents/skills', '.codex/agents', '.cursor/agents', 'scripts/harness'];
   const entries = [...fixed];
@@ -419,12 +423,60 @@ function commandValidateSpec(args) {
     ...(contents.includes('关联计划：') ? [] : ['关联计划']),
     ...REQUIRED_SPEC_HEADINGS.filter((heading) => !contents.includes(heading)),
   ];
+  const delivery = contents.match(/- 设计交付：`(required|not-applicable)`/);
+  const designDirectory = contents.match(/- 设计目录：`([^`]+)`/);
+  if (!delivery) missing.push('设计交付（required 或 not-applicable）');
+  if (!designDirectory) missing.push('设计目录');
+  if (delivery?.[1] === 'required') {
+    if (!designDirectory || designDirectory[1] === '不适用') missing.push('required 设计目录');
+    else {
+      const errors = designValidationErrors(resolve(process.cwd(), designDirectory[1]));
+      if (errors.length) missing.push(`设计交付无效（${errors.join('；')}）`);
+    }
+  }
+  if (delivery?.[1] === 'not-applicable' && designDirectory?.[1] !== '不适用') missing.push('not-applicable 设计目录必须为不适用');
   if (missing.length) fail(`invalid spec; missing: ${missing.join(', ')}.`);
   console.log(`validate-spec: PASS ${relative(ROOT, path)}`);
 }
 
+function designValidationErrors(input) {
+  const candidate = resolve(input);
+  const designPath = existsSync(candidate) && statSync(candidate).isDirectory() ? join(candidate, 'design.md') : candidate;
+  const errors = [];
+  if (!existsSync(designPath)) return ['design.md 不存在'];
+  if (basename(designPath) !== 'design.md') errors.push('文件必须命名为 design.md');
+  const contents = text(designPath);
+  if (!contents.startsWith('# Design:')) errors.push('缺少 # Design 标题');
+  for (const heading of ['关联规格：', '方案版本：', '关联计划：']) if (!contents.includes(heading)) errors.push(`缺少 ${heading}`);
+  for (const heading of REQUIRED_DESIGN_HEADINGS) if (!contents.includes(heading)) errors.push(`缺少 ${heading}`);
+  const links = [...contents.matchAll(/!\[[^\]]*]\(([^)\s]+)\)/g)].map((match) => match[1]);
+  if (links.length === 0) errors.push('至少需要一张本地原型图');
+  for (const link of links) {
+    const normalized = link.replaceAll('\\', '/');
+    const extension = normalized.slice(normalized.lastIndexOf('.')).toLowerCase();
+    if (!normalized.startsWith('prototypes/') || !PROTOTYPE_EXTENSIONS.has(extension)) {
+      errors.push(`原型图必须是 prototypes/ 下的 PNG/WebP/JPG/JPEG/SVG：${link}`);
+      continue;
+    }
+    const prototype = resolve(dirname(designPath), normalized);
+    const allowedRoot = `${resolve(dirname(designPath), 'prototypes')}${sep}`;
+    if (!prototype.startsWith(allowedRoot) || !existsSync(prototype) || !statSync(prototype).isFile()) errors.push(`原型图不存在：${link}`);
+  }
+  return errors;
+}
+
+function commandValidateDesign(args) {
+  const input = args[0];
+  if (!input) fail('validate-design requires a design directory or design.md path.');
+  const path = resolve(process.cwd(), input);
+  const errors = designValidationErrors(path);
+  if (errors.length) fail(`invalid design; ${errors.join('；')}.`);
+  const designPath = existsSync(path) && statSync(path).isDirectory() ? join(path, 'design.md') : path;
+  console.log(`validate-design: PASS ${relative(ROOT, designPath)}`);
+}
+
 function usage() {
-  console.log('Usage: node scripts/harness/cli.mjs <init|doctor|verify|guard|session|install|validate-spec> [options]');
+  console.log('Usage: node scripts/harness/cli.mjs <init|doctor|verify|guard|session|install|validate-spec|validate-design> [options]');
 }
 
 ensureNode();
@@ -437,6 +489,7 @@ switch (command) {
   case 'session': commandSession(); break;
   case 'install': commandInstall(args); break;
   case 'validate-spec': commandValidateSpec(args); break;
+  case 'validate-design': commandValidateDesign(args); break;
   case '--help': case '-h': case undefined: usage(); break;
   default: usage(); fail(`unknown command: ${command}`);
 }

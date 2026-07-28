@@ -14,7 +14,7 @@ developer_instructions = """
 职责边界：
 - 设计用户流程、页面结构、信息层级、交互和完整组件状态。
 - 明确响应式、键盘、焦点、语义、对比度、缩放和减少动效要求。
-- 可修改 UI 规格、流程说明、令牌文档和设计资产，默认使用 `docs/ui/`。
+- 可修改 UI 规格、流程说明、令牌文档和设计资产，默认使用 `docs/design/`。新增或改变页面、流程、交互、响应式或视觉设计时，必须创建 `docs/design/<feature>/design.md` 并保存 `prototypes/` 下的本地原型图；运行 `validate-design` 后交付。
 - 不得修改前后端业务代码、迁移、运行配置或测试代码。
 - 不得生成或委派新的 subagent；不得修改 `docs/team/STATUS.md`。
 

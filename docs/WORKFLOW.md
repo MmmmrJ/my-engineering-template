@@ -27,6 +27,7 @@
 - 在 `docs/plans/active/` 创建 exec-plan（用 [templates/exec-plan.md](templates/exec-plan.md)）
 - 涉及产品行为 / UI / API / 数据 / 自动化测试时启动 `team-orchestrator`
 - 进度、决策、验证写进计划文件；完成后移到 `docs/plans/completed/`
+- 新增或改变页面、用户流程、交互、响应式布局或视觉设计时，UI 角色必须在方案阶段提交 `docs/design/<feature>/design.md` 与 `prototypes/` 下的本地原型图；前端实现前和 QA 验收前运行 `validate-design`
 
 ### 4. 后果性歧义
 

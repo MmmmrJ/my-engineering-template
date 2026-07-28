@@ -15,6 +15,7 @@ function fixture() {
     '.codex/config.toml', '.cursor/hooks.json', '.githooks/pre-commit', '.githooks/pre-push',
     'docs/README.md', 'docs/HARNESS.md', 'docs/WORKFLOW.md', 'docs/ARCHITECTURE.md',
     'docs/templates/exec-plan.md', 'docs/team/STATUS.md', 'docs/team/SKILL_MATRIX.md', 'docs/product/templates/feature-spec.md',
+    'docs/design/README.md', 'docs/design/templates/design.md',
     '.agents/skills', '.codex/agents', '.cursor/agents', 'scripts/harness',
   ];
   for (const source of sources) {
@@ -85,6 +86,44 @@ test('validate-spec accepts the template and rejects an incomplete spec', (t) =>
   const invalid = cli(root, 'validate-spec', 'invalid-spec.md');
   assert.notEqual(invalid.status, 0);
   assert.match(invalid.stderr, /invalid spec; missing:/);
+});
+
+function writeValidDesign(root, name = 'sample') {
+  const directory = join(root, 'docs', 'design', name);
+  mkdirSync(join(directory, 'prototypes'), { recursive: true });
+  writeFileSync(join(directory, 'prototypes', 'desktop-main.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>\n');
+  writeFileSync(join(directory, 'design.md'), `# Design: ${name}\n\n- 方案版本：方案 V1\n- 关联规格：docs/product/${name}.md\n- 关联计划：docs/plans/active/${name}.md\n\n## 原型图清单\n\n![桌面主状态](prototypes/desktop-main.svg)\n\n## 页面结构与视觉规范\n\n- 布局\n\n## 交互流程与状态\n\n- 主流程\n\n## 响应式与无障碍\n\n- 窄屏\n\n## 实施与验收关联\n\n- 映射\n`);
+  return directory;
+}
+
+test('validate-design requires documented local prototype artifacts', (t) => {
+  const root = withFixture(t);
+  const directory = writeValidDesign(root);
+  const valid = cli(root, 'validate-design', 'docs/design/sample');
+  assert.equal(valid.status, 0, valid.stderr);
+  assert.match(valid.stdout, /validate-design: PASS/);
+
+  writeFileSync(join(directory, 'design.md'), '# Design: incomplete\n');
+  const incomplete = cli(root, 'validate-design', 'docs/design/sample');
+  assert.notEqual(incomplete.status, 0);
+  assert.match(incomplete.stderr, /至少需要一张本地原型图/);
+});
+
+test('validate-spec requires a valid design directory when design delivery is required', (t) => {
+  const root = withFixture(t);
+  writeValidDesign(root, 'feature');
+  const template = readFileSync(join(root, 'docs', 'product', 'templates', 'feature-spec.md'), 'utf8');
+  const required = template
+    .replace('设计交付：`not-applicable`', '设计交付：`required`')
+    .replace('设计目录：`不适用`', '设计目录：`docs/design/feature`');
+  writeFileSync(join(root, 'feature-spec.md'), required);
+  const valid = cli(root, 'validate-spec', 'feature-spec.md');
+  assert.equal(valid.status, 0, valid.stderr);
+
+  writeFileSync(join(root, 'feature-spec.md'), required.replace('docs/design/feature', 'docs/design/missing'));
+  const invalid = cli(root, 'validate-spec', 'feature-spec.md');
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /设计交付无效/);
 });
 
 test('verify passes for the empty template configuration', (t) => {

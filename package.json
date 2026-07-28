@@ -13,6 +13,7 @@
     "harness:doctor": "node scripts/harness/cli.mjs doctor",
     "harness:verify": "node scripts/harness/cli.mjs verify",
     "harness:validate-spec": "node scripts/harness/cli.mjs validate-spec",
+    "harness:validate-design": "node scripts/harness/cli.mjs validate-design",
     "test": "node scripts/harness/run-tests.mjs"
   }
 }

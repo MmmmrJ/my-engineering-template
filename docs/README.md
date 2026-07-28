@@ -16,7 +16,7 @@
 |---|---|
 | [product/](product/) | 产品规格、验收标准、非目标 |
 | [product/templates/feature-spec.md](product/templates/feature-spec.md) | 功能规格模板与最低字段 |
-| [design/](design/) | UI/UX 规格与设计资产说明 |
+| [design/](design/) | UI/UX 规格、本地原型图和设计资产；页面/交互变更必须使用 [design 模板](design/templates/design.md) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | `apps/frontend`、`apps/backend`、`packages/contracts` 空目录与边界 |
 | [plans/active/](plans/active/) | 进行中的 durable exec-plan |
 | [plans/completed/](plans/completed/) | 已完成计划归档 |
