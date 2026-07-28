@@ -30,6 +30,7 @@
 - 前端角色必须在实现前阅读该 `design.md` 与原型图，并运行 `node scripts/harness/cli.mjs validate-design <design-directory>`；缺失或校验失败时不得自行补猜视觉/交互细节，应交回父 Agent。
 - QA 必须以该设计目录作为 UI 验收基线，检查关键页面、状态、交互、响应式与无障碍；实现偏离设计时按缺陷或方案变更处理。
 - 不涉及用户可见 UI 的需求，Feature Spec 必须显式标记 `设计交付：not-applicable` 并说明原因。
+- 最终 QA 必须把固定视口、测试数据、原型图、实现截图与结论写入 `verification.md`，并运行 `validate-visual`。未登记偏差、缺失截图或结论非 `pass` 时不得通过。
 
 ## 用户确认门禁
 

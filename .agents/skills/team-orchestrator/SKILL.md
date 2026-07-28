@@ -94,6 +94,8 @@ description: "Orchestrate approval-gated product delivery across product managem
 
 涉及页面、用户流程、交互、响应式或视觉设计时，委派 UI 角色创建 `docs/design/<feature>/design.md` 与 `prototypes/` 下的本地原型图；委派前端时必须给出设计目录并要求先运行 `validate-design`；委派 QA 时必须把设计目录作为视觉和交互验收基线。Feature Spec 如确实不涉及 UI，必须明确标注 `设计交付：not-applicable`。
 
+最终 UI 验收还必须要求 QA 创建 `verification.md` 与 `verification/` 下的实现截图：每个原型场景映射固定视口、测试数据和实现截图；任何偏差写明原因、影响、UI 确认人和设计版本。只有 `validate-visual` 通过，才能把相关 UI 验收标为通过。
+
 优先按以下波次推进：
 
 1. 已确认方案中的 API、数据和共享契约。

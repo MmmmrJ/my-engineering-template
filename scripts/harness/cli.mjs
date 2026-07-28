@@ -16,7 +16,8 @@ const CLI_FILE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(CLI_FILE), '..', '..');
 const COMMAND_NAMES = ['precommit', 'typecheck', 'lint', 'test'];
 const REQUIRED_SPEC_HEADINGS = ['## 目标', '## 范围', '## 非目标', '## 验收标准', '## 实施与验证关联'];
-const REQUIRED_DESIGN_HEADINGS = ['## 原型图清单', '## 页面结构与视觉规范', '## 交互流程与状态', '## 响应式与无障碍', '## 参考规范', '## 实施与验收关联'];
+const REQUIRED_DESIGN_HEADINGS = ['## 视口与状态矩阵', '## 原型图清单', '## 页面结构与视觉规范', '## 交互流程与状态', '## 响应式与无障碍', '## 参考规范', '## 视觉验收基线与偏差', '## 实施与验收关联'];
+const REQUIRED_VISUAL_HEADINGS = ['## 验收矩阵', '## 偏差记录', '## 验收结论'];
 const PROTOTYPE_EXTENSIONS = new Set(['.png', '.webp', '.jpg', '.jpeg', '.svg']);
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next']);
 
@@ -132,6 +133,7 @@ function requiredFiles() {
     'docs/product/templates/feature-spec.md',
     'docs/design/README.md',
     'docs/design/templates/design.md',
+    'docs/design/templates/verification.md',
     'docs/team/STATUS.md',
     'docs/team/SKILL_MATRIX.md',
     'docs/templates/exec-plan.md',
@@ -336,7 +338,7 @@ function managedFiles(root = ROOT) {
     '.codex/config.toml', '.cursor/hooks.json', '.githooks/pre-commit', '.githooks/pre-push',
     'docs/README.md', 'docs/HARNESS.md', 'docs/WORKFLOW.md', 'docs/ARCHITECTURE.md',
     'docs/templates/exec-plan.md', 'docs/team/STATUS.md', 'docs/team/SKILL_MATRIX.md',
-    'docs/product/templates/feature-spec.md', 'docs/design/README.md', 'docs/design/templates/design.md',
+    'docs/product/templates/feature-spec.md', 'docs/design/README.md', 'docs/design/templates/design.md', 'docs/design/templates/verification.md',
   ];
   const dirs = ['.agents/skills', '.codex/agents', '.cursor/agents', 'scripts/harness'];
   const entries = [...fixed];
@@ -465,6 +467,53 @@ function designValidationErrors(input) {
   return errors;
 }
 
+function markdownImageLinks(contents, prefix) {
+  return [...contents.matchAll(/!\[[^\]]*]\(([^)\s]+)\)/g)].map((match) => match[1]).filter((link) => link.replaceAll('\\', '/').startsWith(prefix));
+}
+
+function localImageErrors(base, links, prefix) {
+  const errors = [];
+  for (const link of links) {
+    const normalized = link.replaceAll('\\', '/');
+    const extension = normalized.slice(normalized.lastIndexOf('.')).toLowerCase();
+    if (!normalized.startsWith(prefix) || !PROTOTYPE_EXTENSIONS.has(extension)) {
+      errors.push(`图片必须是 ${prefix} 下的 PNG/WebP/JPG/JPEG/SVG：${link}`);
+      continue;
+    }
+    const image = resolve(base, normalized);
+    const allowedRoot = `${resolve(base, prefix)}${sep}`;
+    if (!image.startsWith(allowedRoot) || !existsSync(image) || !statSync(image).isFile()) errors.push(`图片不存在：${link}`);
+  }
+  return errors;
+}
+
+function visualValidationErrors(input) {
+  const candidate = resolve(input);
+  const directory = existsSync(candidate) && statSync(candidate).isDirectory() ? candidate : dirname(candidate);
+  const errors = designValidationErrors(directory);
+  const verificationPath = join(directory, 'verification.md');
+  if (!existsSync(verificationPath)) return [...errors, 'verification.md 不存在'];
+  const contents = text(verificationPath);
+  if (!contents.startsWith('# Visual Verification:')) errors.push('缺少 # Visual Verification 标题');
+  for (const field of ['设计版本：', '实现提交：', '运行环境：']) if (!contents.includes(field)) errors.push(`缺少 ${field}`);
+  for (const heading of REQUIRED_VISUAL_HEADINGS) if (!contents.includes(heading)) errors.push(`缺少 ${heading}`);
+  if (!contents.includes('| 场景 / 状态 | 视口 | 原型图 | 实现截图 | 对比结论 |')) errors.push('缺少验收矩阵表头');
+  const designPath = join(directory, 'design.md');
+  const prototypeLinks = existsSync(designPath) ? markdownImageLinks(text(designPath), 'prototypes/') : [];
+  const screenshotLinks = markdownImageLinks(contents, 'verification/');
+  if (screenshotLinks.length === 0) errors.push('至少需要一张实现截图');
+  errors.push(...localImageErrors(directory, screenshotLinks, 'verification/'));
+  const mappedRows = contents.split(/\r?\n/).filter((line) => line.startsWith('|') && line.includes('prototypes/') && line.includes('verification/'));
+  if (mappedRows.length < prototypeLinks.length) errors.push('每张原型图都必须在验收矩阵中映射到实现截图');
+  const deviation = contents.match(/- 是否存在偏差：`(yes|no)`/);
+  if (!deviation) errors.push('缺少是否存在偏差（yes 或 no）');
+  if (deviation?.[1] === 'yes' && (!contents.includes('UI 确认人') || !contents.includes('设计版本'))) errors.push('存在偏差时必须记录 UI 确认人与设计版本');
+  const result = contents.match(/- 结论：`(pass|blocked|fail)`/);
+  if (!result) errors.push('缺少验收结论（pass、blocked 或 fail）');
+  else if (result[1] !== 'pass') errors.push(`验收结论为 ${result[1]}，不能通过视觉验收`);
+  return errors;
+}
+
 function commandValidateDesign(args) {
   const input = args[0];
   if (!input) fail('validate-design requires a design directory or design.md path.');
@@ -475,8 +524,17 @@ function commandValidateDesign(args) {
   console.log(`validate-design: PASS ${relative(ROOT, designPath)}`);
 }
 
+function commandValidateVisual(args) {
+  const input = args[0];
+  if (!input) fail('validate-visual requires a design directory or verification.md path.');
+  const path = resolve(process.cwd(), input);
+  const errors = visualValidationErrors(path);
+  if (errors.length) fail(`invalid visual verification; ${errors.join('；')}.`);
+  console.log(`validate-visual: PASS ${relative(ROOT, path)}`);
+}
+
 function usage() {
-  console.log('Usage: node scripts/harness/cli.mjs <init|doctor|verify|guard|session|install|validate-spec|validate-design> [options]');
+  console.log('Usage: node scripts/harness/cli.mjs <init|doctor|verify|guard|session|install|validate-spec|validate-design|validate-visual> [options]');
 }
 
 ensureNode();
@@ -490,6 +548,7 @@ switch (command) {
   case 'install': commandInstall(args); break;
   case 'validate-spec': commandValidateSpec(args); break;
   case 'validate-design': commandValidateDesign(args); break;
+  case 'validate-visual': commandValidateVisual(args); break;
   case '--help': case '-h': case undefined: usage(); break;
   default: usage(); fail(`unknown command: ${command}`);
 }

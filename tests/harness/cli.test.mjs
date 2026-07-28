@@ -15,7 +15,7 @@ function fixture() {
     '.codex/config.toml', '.cursor/hooks.json', '.githooks/pre-commit', '.githooks/pre-push',
     'docs/README.md', 'docs/HARNESS.md', 'docs/WORKFLOW.md', 'docs/ARCHITECTURE.md',
     'docs/templates/exec-plan.md', 'docs/team/STATUS.md', 'docs/team/SKILL_MATRIX.md', 'docs/product/templates/feature-spec.md',
-    'docs/design/README.md', 'docs/design/templates/design.md',
+    'docs/design/README.md', 'docs/design/templates/design.md', 'docs/design/templates/verification.md',
     '.agents/skills', '.codex/agents', '.cursor/agents', 'scripts/harness',
   ];
   for (const source of sources) {
@@ -92,7 +92,7 @@ function writeValidDesign(root, name = 'sample') {
   const directory = join(root, 'docs', 'design', name);
   mkdirSync(join(directory, 'prototypes'), { recursive: true });
   writeFileSync(join(directory, 'prototypes', 'desktop-main.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>\n');
-  writeFileSync(join(directory, 'design.md'), `# Design: ${name}\n\n- 方案版本：方案 V1\n- 关联规格：docs/product/${name}.md\n- 关联计划：docs/plans/active/${name}.md\n\n## 原型图清单\n\n![桌面主状态](prototypes/desktop-main.svg)\n\n## 页面结构与视觉规范\n\n- 布局\n\n## 交互流程与状态\n\n- 主流程\n\n## 响应式与无障碍\n\n- 窄屏\n\n## 参考规范\n\n- Apple Human Interface Guidelines\n\n## 实施与验收关联\n\n- 映射\n`);
+  writeFileSync(join(directory, 'design.md'), `# Design: ${name}\n\n- 方案版本：方案 V1\n- 关联规格：docs/product/${name}.md\n- 关联计划：docs/plans/active/${name}.md\n\n## 视口与状态矩阵\n\n| 场景 / 状态 | 视口 | 原型图 |\n|---|---|---|\n| 桌面默认 | 1440 × 900 | ![桌面主状态](prototypes/desktop-main.svg) |\n\n## 原型图清单\n\n- 主状态\n\n## 页面结构与视觉规范\n\n- 布局\n\n## 交互流程与状态\n\n- 主流程\n\n## 响应式与无障碍\n\n- 窄屏\n\n## 参考规范\n\n- Apple Human Interface Guidelines\n\n## 视觉验收基线与偏差\n\n- 固定视口\n\n## 实施与验收关联\n\n- 映射\n`);
   return directory;
 }
 
@@ -124,6 +124,23 @@ test('validate-spec requires a valid design directory when design delivery is re
   const invalid = cli(root, 'validate-spec', 'feature-spec.md');
   assert.notEqual(invalid.status, 0);
   assert.match(invalid.stderr, /设计交付无效/);
+});
+
+test('validate-visual requires mapped implementation screenshots and a passing conclusion', (t) => {
+  const root = withFixture(t);
+  const directory = writeValidDesign(root, 'visual');
+  mkdirSync(join(directory, 'verification'), { recursive: true });
+  writeFileSync(join(directory, 'verification', 'desktop-main.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>\n');
+  writeFileSync(join(directory, 'verification.md'), `# Visual Verification: visual\n\n- 设计版本：方案 V1\n- 实现提交：abc123\n- 运行环境：Chromium / Windows / fixture data\n\n## 验收矩阵\n\n| 场景 / 状态 | 视口 | 原型图 | 实现截图 | 对比结论 |\n|---|---:|---|---|---|\n| 桌面默认 | 1440 × 900 | ![原型](prototypes/desktop-main.svg) | ![实现](verification/desktop-main.svg) | pass |\n\n## 偏差记录\n\n- 是否存在偏差：\`no\`\n\n## 验收结论\n\n- 结论：\`pass\`\n`);
+
+  const valid = cli(root, 'validate-visual', 'docs/design/visual');
+  assert.equal(valid.status, 0, valid.stderr);
+  assert.match(valid.stdout, /validate-visual: PASS/);
+
+  writeFileSync(join(directory, 'verification.md'), readFileSync(join(directory, 'verification.md'), 'utf8').replace('结论：`pass`', '结论：`blocked`'));
+  const blocked = cli(root, 'validate-visual', 'docs/design/visual');
+  assert.notEqual(blocked.status, 0);
+  assert.match(blocked.stderr, /不能通过视觉验收/);
 });
 
 test('verify passes for the empty template configuration', (t) => {

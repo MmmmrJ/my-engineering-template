@@ -14,6 +14,7 @@
     "harness:verify": "node scripts/harness/cli.mjs verify",
     "harness:validate-spec": "node scripts/harness/cli.mjs validate-spec",
     "harness:validate-design": "node scripts/harness/cli.mjs validate-design",
+    "harness:validate-visual": "node scripts/harness/cli.mjs validate-visual",
     "test": "node scripts/harness/run-tests.mjs"
   }
 }

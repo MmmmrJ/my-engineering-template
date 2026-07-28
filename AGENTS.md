@@ -34,6 +34,8 @@ Never-touch：`.env` 及密钥文件不得写入或 `git add`（由 `node script
 
 新增或改变页面、用户流程、交互、响应式布局或视觉设计时，UI 角色必须将 `docs/design/<feature>/design.md` 与 `prototypes/` 下的本地原型图入库；前端实施前与 QA 验收前必须运行 `node scripts/harness/cli.mjs validate-design <design-directory>`。外部 Figma 链接只能作为补充，不能替代本地原型图。
 
+最终 UI 验收必须将固定视口、测试数据下的实现截图保存至 `verification/`，在 `verification.md` 中逐项映射原型图与实现截图，并记录偏差及 UI 确认人；只有 `node scripts/harness/cli.mjs validate-visual <design-directory>` 通过，才能将 UI 验收标记为通过。
+
 ## 固定角色与共享 Skill
 
 | Codex 类型 | Cursor 类型 | 角色 | 默认共享 Skill |
