@@ -16,21 +16,31 @@ apps/frontend ──► packages/contracts ◄── apps/backend
 
 ## 依赖方向（机械检查）
 
-未配置规则时 `scripts/check-boundaries.sh` 会跳过。业务落地后可启用：
+未配置规则时 `harness.config.json` 中的 `boundaries` 可为空。业务落地后可启用文本级边界检查：
 
-```text
-# FORBIDDEN_IMPORTS
-# apps/frontend/** must-not-import apps/backend
-# packages/contracts/** must-not-import apps/
+```json
+"boundaries": [
+  { "from": "apps/frontend/**", "forbidden": "apps/backend" },
+  { "from": "packages/contracts/**", "forbidden": "apps/" }
+]
 ```
+
+该基础检查按文本引用匹配；选定语言和构建工具后，应把对应的静态依赖分析命令加入 `commands`，不要将文本扫描误认为完整的模块图验证。
 
 ## 验证命令
 
-复制并填写 `scripts/project-checks.env`：
+复制 `harness.config.example.json` 为 `harness.config.json` 并填写：
 
-```bash
-# TYPECHECK_CMD=
-# TEST_CMD=
-# LINT_CMD=
-# PRECOMMIT_CMD=
+```json
+{
+  "schemaVersion": 1,
+  "projectChecksRequired": true,
+  "commands": {
+    "typecheck": [{ "program": "npm", "args": ["run", "typecheck"] }],
+    "lint": [{ "program": "npm", "args": ["run", "lint"] }],
+    "test": [{ "program": "npm", "args": ["run", "test"] }],
+    "precommit": []
+  },
+  "boundaries": []
+}
 ```

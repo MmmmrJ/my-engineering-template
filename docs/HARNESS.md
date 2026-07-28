@@ -25,4 +25,4 @@
 
 - 改业务约束：更新 `docs/ARCHITECTURE.md`、角色 skill 中的领域条款。
 - 改流程：更新 `docs/WORKFLOW.md` 与 `team-orchestrator`（需谨慎，保留确认门禁语义）。
-- 改护栏：改 `scripts/`，并在 `scripts/doctor.sh` 可检出。
+- 改护栏：改 `scripts/harness/`，并用 `node scripts/harness/cli.mjs doctor --strict` 检出。

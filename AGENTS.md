@@ -5,9 +5,9 @@
 ## 如何用于新业务
 
 - 保留 `.agents/`、`.codex/`、`.cursor/`、`docs/`、`scripts/` 与下方 `team-orchestrator` 路由区块。
-- 空业务目录：`apps/frontend/`、`apps/backend/`、`packages/contracts/`；自行搭建技术栈后填写 `docs/ARCHITECTURE.md` 与 `scripts/project-checks.env`。
-- 接到已有仓库：`./scripts/install-harness.sh --merge <target>`（不复制 apps）；棕地扫描用 `$onboard-repository`。
-- 启用 git hooks：`git config core.hooksPath .githooks`。Codex 若提示则执行一次 `/hooks` trust。
+- 空业务目录：`apps/frontend/`、`apps/backend/`、`packages/contracts/`；自行搭建技术栈后填写 `docs/ARCHITECTURE.md` 与 `harness.config.json`。
+- 接到已有仓库：`node scripts/harness/cli.mjs install --merge <target>`（不复制 apps）；棕地扫描用 `$onboard-repository`。
+- 首次启用：`node scripts/harness/cli.mjs init`；Codex 若提示则执行一次 `/hooks` trust。
 - 完整映射见 `docs/team/SKILL_MATRIX.md`；原则见 `docs/HARNESS.md`；流程见 `docs/WORKFLOW.md`。
 
 ## 文档地图
@@ -19,16 +19,9 @@
 
 ## 命令占位（业务仓填写）
 
-```bash
-# 写入 scripts/project-checks.env
-# PRECOMMIT_CMD=
-# TYPECHECK_CMD=
-# LINT_CMD=
-# TEST_CMD=
-# 完成前运行: ./scripts/verify.sh
-```
+`harness.config.json` 使用 `program` + `args` 数组配置 precommit、typecheck、lint 与 test；完成前运行 `node scripts/harness/cli.mjs verify`。不得使用或执行旧的 `scripts/project-checks.env`。
 
-Never-touch：`.env` 及密钥文件不得写入或 `git add`（由 `scripts/guard-bash.sh` 强制）。
+Never-touch：`.env` 及密钥文件不得写入或 `git add`（由 `node scripts/harness/cli.mjs guard` 强制）。
 
 <!-- team-orchestrator:start -->
 ## 自动团队路由

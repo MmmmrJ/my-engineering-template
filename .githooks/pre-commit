@@ -1,4 +1,2 @@
-#!/usr/bin/env bash
-set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-exec "${ROOT}/scripts/pre-commit-checks.sh"
+#!/bin/sh
+exec node "$(git rev-parse --show-toplevel)/scripts/harness/cli.mjs" verify

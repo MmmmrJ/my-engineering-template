@@ -119,4 +119,4 @@ description: "Orchestrate approval-gated product delivery across product managem
 
 ## 移植到其他项目
 
-由父 Agent 执行迁移并写入目标项目的状态文件；subagent 只辅助检查或返回建议。优先使用 `scripts/install-harness.sh --merge <target>`；不要覆盖目标项目已有的 `AGENTS.md`，只合并 `team-orchestrator:start` 与 `team-orchestrator:end` 标记之间的路由区块。棕地仓库先用 `onboard-repository` 产出提案并经用户确认。重置状态表为五个角色 `待命`，然后在 Codex 和 Cursor 中分别启动新任务验证发现、角色名称映射与自动触发。运行 `./scripts/doctor.sh` 做安装后体检。
+由父 Agent 执行迁移并写入目标项目的状态文件；subagent 只辅助检查或返回建议。优先使用 `node scripts/harness/cli.mjs install --merge <target>`；不要覆盖目标项目已有的 `AGENTS.md`，只合并 `team-orchestrator:start` 与 `team-orchestrator:end` 标记之间的路由区块。棕地仓库先用 `onboard-repository` 产出提案并经用户确认。重置状态表为五个角色 `待命`，然后在 Codex 和 Cursor 中分别启动新任务验证发现、角色名称映射与自动触发。运行 `node scripts/harness/cli.mjs doctor --strict` 做安装后体检。

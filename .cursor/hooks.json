@@ -3,20 +3,20 @@
   "hooks": {
     "sessionStart": [
       {
-        "command": "/bin/bash ./scripts/session-context.sh",
+        "command": "node scripts/harness/cli.mjs session",
         "timeout": 15
       }
     ],
     "beforeShellExecution": [
       {
-        "command": "/bin/bash ./scripts/cursor-before-shell.sh",
+        "command": "node scripts/harness/cli.mjs guard",
         "timeout": 20,
         "failClosed": true
       }
     ],
     "stop": [
       {
-        "command": "/bin/bash ./scripts/verify.sh",
+        "command": "node scripts/harness/cli.mjs verify",
         "timeout": 120
       }
     ]

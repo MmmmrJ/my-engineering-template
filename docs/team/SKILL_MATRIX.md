@@ -39,7 +39,7 @@
 - Codex 层：`.codex/agents/*.toml` 可以引用当前 Codex 安装态中的插件/个人 skills；迁移后应重新检查可用性。
 - Cursor 层：`.cursor/agents/*.md` 使用连字符名称与 `model: inherit`；不得包含 `plugin://`、Codex 用户目录或 Codex 专属 skill 标识。
 - `agents/openai.yaml` 是 Codex 展示元数据，Cursor 可忽略，不能作为 Cursor 执行前提。
-- 机械护栏：`scripts/guard-bash.sh` + `.cursor/hooks.json` / `.codex/config.toml` / `.githooks/`。
+- 机械护栏：`node scripts/harness/cli.mjs guard` + `.cursor/hooks.json` / `.codex/config.toml` / `.githooks/`。
 
 ## 推荐验收用例
 
@@ -51,4 +51,4 @@
 6. “把 harness 装进这个旧仓库”选择 `onboard-repository`，确认后再写入。
 7. 在 Cursor 中执行跨前后端需求，确认所有角色只依赖 `.agents/skills/`，且缺少 Codex 插件不会阻塞。
 8. 输入新需求后确认只产出 `方案 V1` 且不修改实现；反馈“不满意”后确认生成 V2 并再次等待；明确批准 V2 后才启动开发和最终 QA。
-9. `./scripts/guard-bash.sh 'git push --force'` 被拦截；`./scripts/doctor.sh` 通过。
+9. `node scripts/harness/cli.mjs guard "git push --force"` 被拦截；`node scripts/harness/cli.mjs doctor --strict` 通过。

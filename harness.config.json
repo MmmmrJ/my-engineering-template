@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "projectChecksRequired": false,
+  "commands": {
+    "precommit": [],
+    "typecheck": [],
+    "lint": [],
+    "test": []
+  },
+  "boundaries": []
+}

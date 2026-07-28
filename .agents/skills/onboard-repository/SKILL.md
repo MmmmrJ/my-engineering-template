@@ -11,8 +11,8 @@ description: Read-only brownfield scan that proposes how to adapt this harness t
 
 1. 确认任务是入职/适配 harness，不是普通功能开发。
 2. 只读扫描：技术栈、目录结构、测试/构建命令、现有 `AGENTS.md`/`README`、CI、密钥文件位置。
-3. 对照模版缺口列出提案：文档骨架、命令写入 `scripts/project-checks.env`、架构边界、是否合并 `team-orchestrator` 区块。
-4. 将提案写入 `docs/plans/active/onboarding-proposal.md`（若目录不存在则先说明需运行 `install-harness.sh`）。
+3. 对照模版缺口列出提案：文档骨架、命令写入 `harness.config.json`、架构边界、是否合并 `team-orchestrator` 区块。
+4. 将提案写入 `docs/plans/active/onboarding-proposal.md`（若目录不存在则先说明需运行 `node scripts/harness/cli.mjs install --merge <target>`）。
 5. 明确标注：`planning_only=true`；等待用户确认提案后，才允许父 Agent 执行选定写入。
 6. 可选：请 `audit-onboarding-proposal` 审查提案是否越界。
 

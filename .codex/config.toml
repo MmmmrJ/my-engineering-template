@@ -9,17 +9,30 @@ approval_policy = "on-request"
 # Prefer ${VAR} references; keep secrets in .env (not committed).
 
 # Session start: re-inject durable pointers
-[[hooks]]
-event = "SessionStart"
-command = ["./scripts/session-context.sh"]
+[[hooks.SessionStart]]
+matcher = "startup|resume|clear|compact"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = 'node "$(git rev-parse --show-toplevel)/scripts/harness/cli.mjs" session'
+timeout = 15
+statusMessage = "Loading harness session context"
 
 # Block dangerous bash before execution
-[[hooks]]
-event = "PreToolUse"
-matcher = "Bash"
-command = ["./scripts/guard-bash.sh"]
+[[hooks.PreToolUse]]
+matcher = "^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = 'node "$(git rev-parse --show-toplevel)/scripts/harness/cli.mjs" guard'
+timeout = 20
+statusMessage = "Checking Bash command"
 
 # Completion gate
-[[hooks]]
-event = "Stop"
-command = ["./scripts/verify.sh"]
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = 'node "$(git rev-parse --show-toplevel)/scripts/harness/cli.mjs" verify'
+timeout = 120
+statusMessage = "Running completion verify"

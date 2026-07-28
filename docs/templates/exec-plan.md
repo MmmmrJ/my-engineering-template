@@ -35,7 +35,7 @@
 
 - [ ] 类型检查 / lint（如适用）
 - [ ] 自动化测试（如适用）
-- [ ] `scripts/verify.sh`
+- [ ] `node scripts/harness/cli.mjs verify`
 - [ ] 手动/浏览器验收（如适用）
 
 ## 完成标准
