@@ -31,6 +31,14 @@
 - 断点与重排规则：
 - 语义、焦点顺序、对比度、缩放、减少动效和辅助技术说明：
 
+## 参考规范
+
+- [Apple Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines/)：
+- [Apple 组件规范](https://developer.apple.com/design/human-interface-guidelines/components/)：
+- [Apple Design Resources（Figma / Sketch UI Kit）](https://developer.apple.com/design/resources/)：
+- [App Review Guidelines](https://developer.apple.com/app-store/guidelines/)：
+- 本设计与上述规范的适用范围、偏差及理由：
+
 ## 实施与验收关联
 
 - 前端实现注意事项：

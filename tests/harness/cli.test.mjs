@@ -92,7 +92,7 @@ function writeValidDesign(root, name = 'sample') {
   const directory = join(root, 'docs', 'design', name);
   mkdirSync(join(directory, 'prototypes'), { recursive: true });
   writeFileSync(join(directory, 'prototypes', 'desktop-main.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>\n');
-  writeFileSync(join(directory, 'design.md'), `# Design: ${name}\n\n- 方案版本：方案 V1\n- 关联规格：docs/product/${name}.md\n- 关联计划：docs/plans/active/${name}.md\n\n## 原型图清单\n\n![桌面主状态](prototypes/desktop-main.svg)\n\n## 页面结构与视觉规范\n\n- 布局\n\n## 交互流程与状态\n\n- 主流程\n\n## 响应式与无障碍\n\n- 窄屏\n\n## 实施与验收关联\n\n- 映射\n`);
+  writeFileSync(join(directory, 'design.md'), `# Design: ${name}\n\n- 方案版本：方案 V1\n- 关联规格：docs/product/${name}.md\n- 关联计划：docs/plans/active/${name}.md\n\n## 原型图清单\n\n![桌面主状态](prototypes/desktop-main.svg)\n\n## 页面结构与视觉规范\n\n- 布局\n\n## 交互流程与状态\n\n- 主流程\n\n## 响应式与无障碍\n\n- 窄屏\n\n## 参考规范\n\n- Apple Human Interface Guidelines\n\n## 实施与验收关联\n\n- 映射\n`);
   return directory;
 }
 

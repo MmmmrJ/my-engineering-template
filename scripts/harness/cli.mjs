@@ -16,7 +16,7 @@ const CLI_FILE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(CLI_FILE), '..', '..');
 const COMMAND_NAMES = ['precommit', 'typecheck', 'lint', 'test'];
 const REQUIRED_SPEC_HEADINGS = ['## 目标', '## 范围', '## 非目标', '## 验收标准', '## 实施与验证关联'];
-const REQUIRED_DESIGN_HEADINGS = ['## 原型图清单', '## 页面结构与视觉规范', '## 交互流程与状态', '## 响应式与无障碍', '## 实施与验收关联'];
+const REQUIRED_DESIGN_HEADINGS = ['## 原型图清单', '## 页面结构与视觉规范', '## 交互流程与状态', '## 响应式与无障碍', '## 参考规范', '## 实施与验收关联'];
 const PROTOTYPE_EXTENSIONS = new Set(['.png', '.webp', '.jpg', '.jpeg', '.svg']);
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next']);
 
