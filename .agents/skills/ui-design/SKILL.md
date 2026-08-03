@@ -14,9 +14,11 @@ description: Design user flows, information hierarchy, page and component states
 3. 描述页面、组件和关键交互，覆盖默认、加载、空、错误、成功、禁用、延迟和离线状态。
 4. 明确桌面、平板和窄屏布局变化，以及键盘顺序、焦点、语义、对比度、缩放和动效降级。
 5. 对演示数据、延迟数据、权限限制和合规提示给出持续、可理解的视觉标识。
-6. 对新增或改变页面、用户流程、交互、响应式布局或视觉设计，创建 `docs/design/<feature>/design.md`，并将本地原型图保存到 `prototypes/`；每张图必须由 design.md 引用，Figma 链接不能替代本地导出图。为每个验收场景明确固定视口、状态和测试数据。
-7. 运行 `node scripts/harness/cli.mjs validate-design docs/design/<feature>`，输出前端可直接实现、QA 可直接验证的状态矩阵、行为和验收说明。
-8. 在团队工作流中把设计作为待用户审核方案交付；用户不满意时按具体反馈修订，标明版本差异并再次提交，不得自行宣布设计获批。
+6. 对新增或改变页面、用户流程、交互、响应式布局或视觉设计，创建 `docs/design/<feature>/design.md`，将本地原型图保存到 `prototypes/`，并创建 `assets/manifest.md` 与本地冻结资产；三者共同构成实施契约。每张图必须由 design.md 引用，外部链接不能替代本地原型或运行时资产。为每个验收场景明确固定视口、状态和测试数据。
+7. 用户点名 skill 或插件时，记录能力、角色、输入、候选产物和不可用时的降级方式；其输出只能作为设计输入，必须经视觉方向选择、资产冻结和用户确认后才能交给实现。
+8. 为图标记录批准库/本地 SVG、版本、图标名、尺寸、颜色、状态和无障碍名称；为背景图记录来源/许可、本地冻结文件、显示模式、裁切焦点、遮罩、对比度和响应式变体。不得以 emoji、临时 CSS 或未确认相似资产替换冻结资产。
+9. 运行 `node scripts/harness/cli.mjs validate-design docs/design/<feature>`，输出前端可直接实现、QA 可直接验证的状态矩阵、行为和验收说明。
+10. 在团队工作流中把设计作为待用户审核方案交付；用户不满意时按具体反馈修订，标明版本差异并再次提交，不得自行宣布设计获批。
 
 ## 设计原则
 
@@ -32,7 +34,7 @@ description: Design user flows, information hierarchy, page and component states
 - 视觉层级、令牌和交互说明
 - 响应式与无障碍要求
 - 可测试的 UI 验收标准
-- `design.md` 与其本地原型图路径
+- `design.md`、本地原型图及 `assets/manifest.md` 路径与冻结版本
 - 允许偏差边界，以及最终 `verification.md` 所需的原型场景映射
 
 不得修改前后端业务代码、迁移、运行时配置或测试代码。只有父 Agent 提供当前方案的明确用户确认记录后，才能把设计标记为已确认并交给实现角色。

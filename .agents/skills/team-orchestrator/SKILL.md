@@ -33,7 +33,7 @@ description: "Orchestrate approval-gated product delivery across product managem
 | `backend_engineer` / `backend-engineer` | `backend-engineering` | API、数据、业务逻辑、迁移、后端测试 | 后端代码及相关测试 |
 | `qa_engineer` / `qa-engineer` | `quality-engineering` | 测试计划、自动化测试、回归和验收 | 测试、夹具和测试文档 |
 
-委派时把所选共享 skill 的路径写进提示，要求 subagent 完整读取后执行。再根据 `docs/team/SKILL_MATRIX.md` 选择平台增强：只在能力存在且触发条件满足时使用；增强缺失时回退共享 skill，不得阻塞或扩大角色边界。Cursor 委派中不得注入 Codex plugin URI、Codex 专属 skill 名称或本机绝对路径。
+委派时把所选共享 skill 的路径写进提示，要求 subagent 完整读取后执行。用户点名 skill 或插件时，父 Agent 还必须登记请求能力、适用角色、输入、预期设计产物与不可用时的降级方式；其输出只可作为可追溯候选输入，不能解除方案确认、资产冻结或视觉验收门禁。再根据 `docs/team/SKILL_MATRIX.md` 选择平台增强：只在能力存在且触发条件满足时使用；增强缺失时回退共享 skill，不得阻塞、静默改变视觉方向或扩大角色边界。Cursor 委派中不得注入 Codex plugin URI、Codex 专属 skill 名称或本机绝对路径。
 
 若平台未注册所需自定义类型，使用平台通用 worker 并在委派提示中注入对应角色、边界和状态格式；若平台无法委派，则由父 Agent 完成该有界工作并在状态中标记降级执行。
 
@@ -72,7 +72,7 @@ description: "Orchestrate approval-gated product delivery across product managem
 按需委派产品、UI、前端、后端和 QA 进行方案工作，并明确标注 `planning_only=true` 和 `方案阶段：未获用户确认，禁止实施`。父 Agent 收敛为带版本号的 `方案 Vn`，至少直接向用户呈现：
 
 - 目标、范围、非目标和关键假设。
-- 用户流程、页面/组件状态；若新增或改变页面、交互、响应式或视觉设计，必须附 `docs/design/<feature>/design.md` 与本地原型图，或明确说明不涉及 UI。
+- 用户流程、页面/组件状态；若新增或改变页面、交互、响应式或视觉设计，必须附 `docs/design/<feature>/design.md`、本地原型图与 `assets/manifest.md`，或明确说明不涉及 UI。
 - API、数据、兼容、迁移和回滚设计，或不涉及后端的明确说明。
 - 前后端实施步骤、文件影响、依赖顺序和责任角色。
 - 测试计划、验收标准、风险和待决项。
@@ -90,11 +90,11 @@ description: "Orchestrate approval-gated product delivery across product managem
 
 ### 6. 分批实施
 
-每个实现委派提示都写明：`用户已确认：方案 Vn`、确认范围、目标、依赖、默认共享 skill 路径、允许和禁止修改的路径、预期交付物、必须运行的验证、完成标准、可选平台增强及其触发条件，以及最终状态行格式。缺少明确确认记录时，前端、后端和 QA 不得执行实现或最终验收。启动后立即把该角色更新为 `进行中`。
+每个实现委派提示都写明：`用户已确认：方案 Vn`、确认范围、目标、依赖、默认共享 skill 路径、允许和禁止修改的路径、预期交付物、必须运行的验证、完成标准、用户点名能力及其已登记产物、可选平台增强及其触发条件，以及最终状态行格式。缺少明确确认记录时，前端、后端和 QA 不得执行实现或最终验收。启动后立即把该角色更新为 `进行中`。
 
-涉及页面、用户流程、交互、响应式或视觉设计时，委派 UI 角色创建 `docs/design/<feature>/design.md` 与 `prototypes/` 下的本地原型图；委派前端时必须给出设计目录并要求先运行 `validate-design`；委派 QA 时必须把设计目录作为视觉和交互验收基线。Feature Spec 如确实不涉及 UI，必须明确标注 `设计交付：not-applicable`。
+涉及页面、用户流程、交互、响应式或视觉设计时，委派 UI 角色创建 `docs/design/<feature>/design.md`、`prototypes/` 下的本地原型图及 `assets/manifest.md`；UI 角色独占视觉方向、资产入库、资产冻结和偏差判定。委派前端时必须给出设计目录，要求先运行 `validate-design` 并确认冻结资产，禁止自行新增模块、替换图片/图标或重新设计；委派 QA 时必须把设计目录作为视觉、交互与资产验收基线。Feature Spec 如确实不涉及 UI，必须明确标注 `设计交付：not-applicable`。
 
-最终 UI 验收还必须要求 QA 创建 `verification.md` 与 `verification/` 下的实现截图：每个原型场景映射固定视口、测试数据和实现截图；任何偏差写明原因、影响、UI 确认人和设计版本。只有 `validate-visual` 通过，才能把相关 UI 验收标为通过。
+最终 UI 验收还必须要求 QA 创建 `verification.md` 与 `verification/` 下的实现截图：每个原型场景映射固定视口、测试数据、资产版本和实现截图；偏差按 P0/P1/P2 记录原因、影响、状态、UI 确认人和设计版本。P0/P1 必须修复，P2 必须具名确认。只有 `validate-visual` 通过，才能把相关 UI 验收标为通过。
 
 优先按以下波次推进：
 

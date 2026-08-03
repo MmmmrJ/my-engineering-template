@@ -27,7 +27,7 @@
 
 - 设计交付：`not-applicable`
 - 设计目录：`不适用`
-- 不适用说明：若需求新增或改变页面、用户流程、交互、响应式布局或视觉设计，改为 `required`，并填写 `docs/design/<feature>/`。该目录必须包含 `design.md` 与 `prototypes/` 下的本地原型图。
+- 不适用说明：若需求新增或改变页面、用户流程、交互、响应式布局或视觉设计，改为 `required`，并填写 `docs/design/<feature>/`。该目录必须包含 `design.md`、`prototypes/` 下的本地原型图和 `assets/manifest.md`。
 
 ## 验收标准
 

@@ -16,9 +16,13 @@ const CLI_FILE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(CLI_FILE), '..', '..');
 const COMMAND_NAMES = ['precommit', 'typecheck', 'lint', 'test'];
 const REQUIRED_SPEC_HEADINGS = ['## 目标', '## 范围', '## 非目标', '## 验收标准', '## 实施与验证关联'];
-const REQUIRED_DESIGN_HEADINGS = ['## 视口与状态矩阵', '## 原型图清单', '## 页面结构与视觉规范', '## 交互流程与状态', '## 响应式与无障碍', '## 参考规范', '## 视觉验收基线与偏差', '## 实施与验收关联'];
+const REQUIRED_DESIGN_HEADINGS = ['## 原型来源与能力记录', '## 视口与状态矩阵', '## 原型图清单', '## 资产清单', '## 设计冻结', '## 页面结构与视觉规范', '## 关键视觉不变量', '## 交互流程与状态', '## 响应式与无障碍', '## 参考规范', '## 视觉验收基线与偏差', '## 实施与验收关联'];
 const REQUIRED_VISUAL_HEADINGS = ['## 验收矩阵', '## 偏差记录', '## 验收结论'];
 const PROTOTYPE_EXTENSIONS = new Set(['.png', '.webp', '.jpg', '.jpeg', '.svg']);
+const DESIGN_MATRIX_HEADER = '| 场景 / 状态 | 视口 | 测试数据 / 权限 | 原型图 | 说明 |';
+const VISUAL_MATRIX_HEADER = '| 场景 / 状态 | 视口 | 测试数据 / 权限 | 原型图 | 实现截图 | 比较方法 | 对比结论 |';
+const ASSET_MANIFEST_HEADER = '| 资产 ID | 类型 | 原型场景 | 语义用途 | 来源 / 许可 | 冻结文件 | 运行时路径 / 图标包 | 实现规范 | 替代规则 |';
+const DEVIATION_TABLE_HEADER = '| 编号 | 级别（P0/P1/P2） | 状态（resolved/accepted/open） | 场景 | 原型表现 | 实际实现 | 原因 | 影响 | UI 确认人 | 设计版本 | 资产版本 |';
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', '.next']);
 
 function fail(message, code = 1) {
@@ -133,6 +137,7 @@ function requiredFiles() {
     'docs/product/templates/feature-spec.md',
     'docs/design/README.md',
     'docs/design/templates/design.md',
+    'docs/design/templates/assets/manifest.md',
     'docs/design/templates/verification.md',
     'docs/team/STATUS.md',
     'docs/team/SKILL_MATRIX.md',
@@ -338,7 +343,7 @@ function managedFiles(root = ROOT) {
     '.codex/config.toml', '.cursor/hooks.json', '.githooks/pre-commit', '.githooks/pre-push',
     'docs/README.md', 'docs/HARNESS.md', 'docs/WORKFLOW.md', 'docs/ARCHITECTURE.md',
     'docs/templates/exec-plan.md', 'docs/team/STATUS.md', 'docs/team/SKILL_MATRIX.md',
-    'docs/product/templates/feature-spec.md', 'docs/design/README.md', 'docs/design/templates/design.md', 'docs/design/templates/verification.md',
+    'docs/product/templates/feature-spec.md', 'docs/design/README.md', 'docs/design/templates/design.md', 'docs/design/templates/assets/manifest.md', 'docs/design/templates/verification.md',
   ];
   const dirs = ['.agents/skills', '.codex/agents', '.cursor/agents', 'scripts/harness'];
   const entries = [...fixed];
@@ -441,6 +446,88 @@ function commandValidateSpec(args) {
   console.log(`validate-spec: PASS ${relative(ROOT, path)}`);
 }
 
+function fieldValue(contents, label) {
+  const match = contents.match(new RegExp(`^- ${label}：\\s*\\x60?([^\\x60\\n]+)\\x60?\\s*$`, 'm'));
+  return match?.[1]?.trim() ?? '';
+}
+
+function markdownTableRows(contents, header) {
+  const lines = contents.split(/\r?\n/);
+  const index = lines.findIndex((line) => line.trim() === header);
+  if (index < 0) return [];
+  const rows = [];
+  for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+    const line = lines[cursor].trim();
+    if (!line.startsWith('|')) break;
+    if (/^\|[\s:|-]+\|$/.test(line)) continue;
+    rows.push(line.split('|').slice(1, -1).map((cell) => cell.trim()));
+  }
+  return rows;
+}
+
+function firstMarkdownImage(cell, prefix) {
+  return markdownImageLinks(cell, prefix)[0] ?? '';
+}
+
+function localAssetError(directory, path, label) {
+  const normalized = path.replaceAll('\\', '/');
+  if (!normalized.startsWith('assets/')) return `${label}必须是 assets/ 下的本地文件：${path}`;
+  const asset = resolve(directory, normalized);
+  const allowedRoot = `${resolve(directory, 'assets')}${sep}`;
+  if (!asset.startsWith(allowedRoot) || !existsSync(asset) || !statSync(asset).isFile()) return `${label}不存在：${path}`;
+  return '';
+}
+
+function assetManifestValidationErrors(directory, designContents) {
+  const errors = [];
+  const manifestReference = fieldValue(designContents, '资产清单');
+  if (manifestReference !== 'assets/manifest.md') {
+    errors.push('资产清单必须引用 assets/manifest.md');
+    return errors;
+  }
+  const manifestPath = join(directory, 'assets', 'manifest.md');
+  if (!existsSync(manifestPath)) return ['assets/manifest.md 不存在'];
+  const contents = text(manifestPath);
+  if (!contents.startsWith('# Asset Manifest:')) errors.push('资产清单缺少 # Asset Manifest 标题');
+  const designVersion = fieldValue(designContents, '方案版本');
+  const assetVersion = fieldValue(designContents, '资产版本');
+  if (!fieldValue(contents, '设计版本')) errors.push('资产清单缺少设计版本');
+  else if (fieldValue(contents, '设计版本') !== designVersion) errors.push('资产清单设计版本与 design.md 不一致');
+  if (!fieldValue(contents, '资产版本')) errors.push('资产清单缺少资产版本');
+  else if (fieldValue(contents, '资产版本') !== assetVersion) errors.push('资产清单资产版本与 design.md 不一致');
+  if (!['draft', 'frozen'].includes(fieldValue(contents, '冻结状态'))) errors.push('资产清单冻结状态必须为 draft 或 frozen');
+  if (!contents.includes(ASSET_MANIFEST_HEADER)) errors.push('资产清单缺少标准表头');
+  const rows = markdownTableRows(contents, ASSET_MANIFEST_HEADER);
+  if (rows.length === 0) errors.push('资产清单至少需要一行资产或 none 声明');
+  for (const row of rows) {
+    const [assetId, type, scenario, purpose, source, frozenFile, runtime, specification, fallback] = row;
+    if ([assetId, type, scenario, purpose, source, frozenFile, runtime, specification, fallback].some((cell) => !cell)) {
+      errors.push(`资产清单存在不完整条目：${assetId || '未命名资产'}`);
+      continue;
+    }
+    if (assetId === 'none') continue;
+    if (/待补充|<[^>]+>/.test(source)) errors.push(`资产来源与许可必须是可追溯记录：${assetId}`);
+    if (/https?:\/\//i.test(runtime)) errors.push(`资产运行时路径不得使用外链：${assetId}`);
+    if (!/@\d/.test(runtime) && !/^(assets\/|\/assets\/|apps\/|packages\/)/.test(runtime)) errors.push(`资产运行时路径必须是本地资产或固定版本图标包：${assetId}`);
+    if (!['not-applicable', 'N/A', 'N/A（锁定图标包）'].includes(frozenFile)) {
+      const error = localAssetError(directory, frozenFile, '冻结文件');
+      if (error) errors.push(`${assetId}：${error}`);
+    }
+    const normalizedType = type.toLowerCase();
+    if ((normalizedType.includes('icon') || type.includes('图标')) && !runtime.startsWith('assets/') && !/@\d/.test(runtime)) {
+      errors.push(`图标包必须固定版本：${assetId}`);
+    }
+    if (/未登记|相似图标|临时 CSS|emoji|Unicode/i.test(fallback)) errors.push(`资产替代规则必须登记偏差并取得 UI 确认：${assetId}`);
+    if (normalizedType.includes('background') || type.includes('背景')) {
+      if (['not-applicable', 'N/A', 'N/A（锁定图标包）'].includes(frozenFile)) errors.push(`背景图必须有冻结本地文件：${assetId}`);
+      if (!/(cover|contain)/i.test(specification) || !/(裁切)?焦点/.test(specification) || !specification.includes('对比度')) {
+        errors.push(`背景图实现规范必须包含 cover/contain、裁切焦点和对比度：${assetId}`);
+      }
+    }
+  }
+  return errors;
+}
+
 function designValidationErrors(input) {
   const candidate = resolve(input);
   const designPath = existsSync(candidate) && statSync(candidate).isDirectory() ? join(candidate, 'design.md') : candidate;
@@ -448,22 +535,30 @@ function designValidationErrors(input) {
   if (!existsSync(designPath)) return ['design.md 不存在'];
   if (basename(designPath) !== 'design.md') errors.push('文件必须命名为 design.md');
   const contents = text(designPath);
+  const directory = dirname(designPath);
   if (!contents.startsWith('# Design:')) errors.push('缺少 # Design 标题');
   for (const heading of ['关联规格：', '方案版本：', '关联计划：']) if (!contents.includes(heading)) errors.push(`缺少 ${heading}`);
   for (const heading of REQUIRED_DESIGN_HEADINGS) if (!contents.includes(heading)) errors.push(`缺少 ${heading}`);
-  const links = [...contents.matchAll(/!\[[^\]]*]\(([^)\s]+)\)/g)].map((match) => match[1]);
+  const capabilityStart = contents.indexOf('## 原型来源与能力记录');
+  const capabilityEnd = contents.indexOf('\n## ', capabilityStart + 1);
+  const capabilitySection = capabilityStart < 0 ? '' : contents.slice(capabilityStart, capabilityEnd < 0 ? undefined : capabilityEnd);
+  if (!contents.includes('| 用户指定能力 |') || /待补充|<[^>]+>/.test(capabilitySection)) errors.push('缺少可追溯的用户指定能力记录');
+  if (!['draft', 'frozen'].includes(fieldValue(contents, '资产冻结'))) errors.push('资产冻结必须为 draft 或 frozen');
+  if (!fieldValue(contents, '资产版本')) errors.push('缺少资产版本');
+  if (!contents.includes(DESIGN_MATRIX_HEADER)) errors.push('缺少包含测试数据的视口与状态矩阵表头');
+  const allLinks = [...contents.matchAll(/!\[[^\]]*]\(([^)\s]+)\)/g)].map((match) => match[1]);
+  const links = allLinks.filter((link) => link.replaceAll('\\', '/').startsWith('prototypes/'));
   if (links.length === 0) errors.push('至少需要一张本地原型图');
-  for (const link of links) {
-    const normalized = link.replaceAll('\\', '/');
-    const extension = normalized.slice(normalized.lastIndexOf('.')).toLowerCase();
-    if (!normalized.startsWith('prototypes/') || !PROTOTYPE_EXTENSIONS.has(extension)) {
-      errors.push(`原型图必须是 prototypes/ 下的 PNG/WebP/JPG/JPEG/SVG：${link}`);
-      continue;
-    }
-    const prototype = resolve(dirname(designPath), normalized);
-    const allowedRoot = `${resolve(dirname(designPath), 'prototypes')}${sep}`;
-    if (!prototype.startsWith(allowedRoot) || !existsSync(prototype) || !statSync(prototype).isFile()) errors.push(`原型图不存在：${link}`);
+  for (const link of allLinks) {
+    if (!link.replaceAll('\\', '/').startsWith('prototypes/')) errors.push(`原型图必须是 prototypes/ 下的本地文件：${link}`);
   }
+  errors.push(...localImageErrors(directory, links, 'prototypes/'));
+  const sceneRows = markdownTableRows(contents, DESIGN_MATRIX_HEADER);
+  if (sceneRows.length === 0) errors.push('视口与状态矩阵至少需要一个场景');
+  for (const row of sceneRows) {
+    if (row.length < 5 || !row[0] || !row[1] || !row[2] || !firstMarkdownImage(row[3], 'prototypes/')) errors.push('视口与状态矩阵必须记录场景、视口、测试数据和原型图');
+  }
+  errors.push(...assetManifestValidationErrors(directory, contents));
   return errors;
 }
 
@@ -495,19 +590,51 @@ function visualValidationErrors(input) {
   if (!existsSync(verificationPath)) return [...errors, 'verification.md 不存在'];
   const contents = text(verificationPath);
   if (!contents.startsWith('# Visual Verification:')) errors.push('缺少 # Visual Verification 标题');
-  for (const field of ['设计版本：', '实现提交：', '运行环境：']) if (!contents.includes(field)) errors.push(`缺少 ${field}`);
+  for (const field of ['设计版本：', '资产版本：', '实现提交：', '运行环境：', '资产一致性检查：']) if (!contents.includes(field)) errors.push(`缺少 ${field}`);
   for (const heading of REQUIRED_VISUAL_HEADINGS) if (!contents.includes(heading)) errors.push(`缺少 ${heading}`);
-  if (!contents.includes('| 场景 / 状态 | 视口 | 原型图 | 实现截图 | 对比结论 |')) errors.push('缺少验收矩阵表头');
+  if (!contents.includes(VISUAL_MATRIX_HEADER)) errors.push('缺少包含测试数据和比较方法的验收矩阵表头');
   const designPath = join(directory, 'design.md');
-  const prototypeLinks = existsSync(designPath) ? markdownImageLinks(text(designPath), 'prototypes/') : [];
+  const designContents = existsSync(designPath) ? text(designPath) : '';
+  const prototypeLinks = markdownImageLinks(designContents, 'prototypes/');
   const screenshotLinks = markdownImageLinks(contents, 'verification/');
   if (screenshotLinks.length === 0) errors.push('至少需要一张实现截图');
   errors.push(...localImageErrors(directory, screenshotLinks, 'verification/'));
-  const mappedRows = contents.split(/\r?\n/).filter((line) => line.startsWith('|') && line.includes('prototypes/') && line.includes('verification/'));
-  if (mappedRows.length < prototypeLinks.length) errors.push('每张原型图都必须在验收矩阵中映射到实现截图');
+  const designRows = markdownTableRows(designContents, DESIGN_MATRIX_HEADER);
+  const visualRows = markdownTableRows(contents, VISUAL_MATRIX_HEADER);
+  for (const row of visualRows) {
+    if (row.length < 7 || !row[0] || !row[1] || !row[2] || !firstMarkdownImage(row[3], 'prototypes/') || !firstMarkdownImage(row[4], 'verification/') || !row[5] || !row[6]) {
+      errors.push('验收矩阵必须记录场景、视口、测试数据、原型、实现截图、比较方法和结论');
+    }
+  }
+  for (const [scene, viewport, data, prototypeCell] of designRows) {
+    const prototype = firstMarkdownImage(prototypeCell, 'prototypes/');
+    const matches = visualRows.some((row) => row[0] === scene && row[1] === viewport && row[2] === data && firstMarkdownImage(row[3] ?? '', 'prototypes/') === prototype && firstMarkdownImage(row[4] ?? '', 'verification/'));
+    if (!matches) errors.push(`验收矩阵必须按相同场景、视口、测试数据映射原型和实现截图：${scene}`);
+  }
+  if (visualRows.length < prototypeLinks.length) errors.push('每张原型图都必须在验收矩阵中映射到实现截图');
+  if (fieldValue(contents, '设计版本') !== fieldValue(designContents, '方案版本')) errors.push('验收设计版本与 design.md 不一致');
+  const manifestPath = join(directory, 'assets', 'manifest.md');
+  if (existsSync(manifestPath) && fieldValue(contents, '资产版本') !== fieldValue(text(manifestPath), '资产版本')) errors.push('验收资产版本与资产清单不一致');
+  if (fieldValue(designContents, '资产冻结') !== 'frozen') errors.push('视觉验收要求 design.md 的资产已冻结');
+  if (existsSync(manifestPath) && fieldValue(text(manifestPath), '冻结状态') !== 'frozen') errors.push('视觉验收要求资产清单冻结状态为 frozen');
+  if (fieldValue(contents, '资产一致性检查') !== 'pass') errors.push('资产一致性检查必须为 pass');
   const deviation = contents.match(/- 是否存在偏差：`(yes|no)`/);
   if (!deviation) errors.push('缺少是否存在偏差（yes 或 no）');
-  if (deviation?.[1] === 'yes' && (!contents.includes('UI 确认人') || !contents.includes('设计版本'))) errors.push('存在偏差时必须记录 UI 确认人与设计版本');
+  if (!contents.includes(DEVIATION_TABLE_HEADER)) errors.push('偏差记录缺少级别、状态和 UI 确认人字段');
+  const deviations = markdownTableRows(contents, DEVIATION_TABLE_HEADER);
+  if (deviation?.[1] === 'yes' && deviations.length === 0) errors.push('存在偏差时必须登记偏差条目');
+  for (const row of deviations) {
+    const [id, level, status, , , , , , approver, version] = row;
+    if (!id || !['P0', 'P1', 'P2'].includes(level) || !['resolved', 'accepted', 'open'].includes(status)) {
+      errors.push('偏差记录必须包含有效编号、级别和状态');
+      continue;
+    }
+    if ((level === 'P0' || level === 'P1') && status !== 'resolved') errors.push(`${level} 偏差必须修复后才能通过：${id}`);
+    if (level === 'P2' && (status !== 'accepted' || !approver || approver === '—' || version !== fieldValue(designContents, '方案版本'))) {
+      errors.push(`P2 偏差必须经 UI 确认并关联当前设计版本：${id}`);
+    }
+    if (status === 'open') errors.push(`存在未关闭偏差：${id}`);
+  }
   const result = contents.match(/- 结论：`(pass|blocked|fail)`/);
   if (!result) errors.push('缺少验收结论（pass、blocked 或 fail）');
   else if (result[1] !== 'pass') errors.push(`验收结论为 ${result[1]}，不能通过视觉验收`);

@@ -66,9 +66,9 @@ node scripts/harness/cli.mjs install --dry-run --merge /path/to/your-app
 
 新功能从 [feature-spec 模板](docs/product/templates/feature-spec.md) 开始；确认后的执行计划存入 `docs/plans/active/`，完成后归档。运行 `node scripts/harness/cli.mjs validate-spec <file>` 可校验最低规格结构。
 
-新增或改变页面、用户流程、交互、响应式布局或视觉设计时，必须额外保存 `docs/design/<feature>/design.md` 和 `prototypes/` 下的本地原型图。前端实现前及 QA 验收前运行 `node scripts/harness/cli.mjs validate-design docs/design/<feature>`。
+新增或改变页面、用户流程、交互、响应式布局或视觉设计时，必须额外保存 `docs/design/<feature>/design.md`、`prototypes/` 下的本地原型图和 `assets/manifest.md` 中的冻结本地资产。用户点名的 skill 或插件只提供可追溯候选输入，不能绕过确认、资产冻结或验收。前端实现前及 QA 验收前运行 `node scripts/harness/cli.mjs validate-design docs/design/<feature>`。
 
-最终 UI 验收还必须保存 `verification/` 下的实现截图和 `verification.md`。该报告把每个原型场景映射到固定视口、测试数据和实现截图；运行 `node scripts/harness/cli.mjs validate-visual docs/design/<feature>` 作为通过门禁。
+最终 UI 验收还必须保存 `verification/` 下的实现截图和 `verification.md`。该报告把每个原型场景映射到固定视口、测试数据、资产版本和实现截图；P0/P1 偏差必须修复，P2 需具名 UI 确认。运行 `node scripts/harness/cli.mjs validate-visual docs/design/<feature>` 作为通过门禁。
 
 ## 最小验收清单
 

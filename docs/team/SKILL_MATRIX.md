@@ -23,14 +23,15 @@
 - `security-best-practices` 只在明确的安全审查或安全加固请求中使用，不能因为“后端/前端开发”而自动触发。
 - `onboard-repository` 默认只读；未确认提案不得覆盖 `AGENTS.md` 或业务代码。
 - 所有增强都继承角色原有写入边界，不能授权 subagent 生成下级 agent 或修改 `docs/team/STATUS.md`。
+- 用户点名 skill 或插件时，父 Agent 必须登记请求能力、适用角色、输入、候选产物、预期设计交付与降级方式；其产物不构成实施批准，也不能免除本地资产、设计冻结和视觉验收要求。
 
 ## 页面与交互设计交付门禁
 
-- 新增或改变页面、用户流程、交互、响应式布局或视觉设计时，UI 角色必须创建 `docs/design/<feature>/design.md`，并将本地原型图放入同目录 `prototypes/`。Figma 等外部链接只能作为补充。
-- 前端角色必须在实现前阅读该 `design.md` 与原型图，并运行 `node scripts/harness/cli.mjs validate-design <design-directory>`；缺失或校验失败时不得自行补猜视觉/交互细节，应交回父 Agent。
-- QA 必须以该设计目录作为 UI 验收基线，检查关键页面、状态、交互、响应式与无障碍；实现偏离设计时按缺陷或方案变更处理。
+- 新增或改变页面、用户流程、交互、响应式布局或视觉设计时，UI 角色必须创建 `docs/design/<feature>/design.md`，将本地原型图放入同目录 `prototypes/`，并创建可追溯的 `assets/manifest.md` 与冻结资产；三者共同构成实施契约。外部链接只能作为补充，运行时图片不得依赖外链。
+- 前端角色必须在实现前阅读该 `design.md`、原型图和资产清单，确认设计/资产冻结并运行 `node scripts/harness/cli.mjs validate-design <design-directory>`；缺失或校验失败时不得自行补猜视觉/交互细节、替换图标/背景图或重设计，应交回父 Agent。
+- QA 必须以该设计目录作为 UI 验收基线，检查关键页面、状态、交互、资产版本、响应式与无障碍；实现偏离设计时按缺陷或方案变更处理。
 - 不涉及用户可见 UI 的需求，Feature Spec 必须显式标记 `设计交付：not-applicable` 并说明原因。
-- 最终 QA 必须把固定视口、测试数据、原型图、实现截图与结论写入 `verification.md`，并运行 `validate-visual`。未登记偏差、缺失截图或结论非 `pass` 时不得通过。
+- 最终 QA 必须把固定视口、测试数据、原型图、资产版本、实现截图与结论写入 `verification.md`，并运行 `validate-visual`。P0/P1 偏差未修复、P2 偏差无具名 UI 确认、缺失截图或结论非 `pass` 时不得通过。
 
 ## 用户确认门禁
 

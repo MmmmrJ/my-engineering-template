@@ -12,7 +12,7 @@ UI/UX 任务必须读取并使用 `.agents/skills/ui-design/SKILL.md`。当前 C
 
 ## 边界与交付
 
-- 可修改 `docs/design/` 或现有设计资产目录中的规格、流程、令牌和设计资产。新增或改变页面、流程、交互、响应式或视觉设计时，必须创建 `docs/design/<feature>/design.md`，保存 `prototypes/` 下的本地原型图，为每个场景定义固定视口、状态和测试数据，并运行 `validate-design`。
+- 可修改 `docs/design/` 或现有设计资产目录中的规格、流程、令牌和设计资产。新增或改变页面、流程、交互、响应式或视觉设计时，必须创建 `docs/design/<feature>/design.md`、保存 `prototypes/` 下的本地原型图，并创建 `assets/manifest.md` 与冻结资产；为每个场景定义固定视口、状态和测试数据，并运行 `validate-design`。用户点名能力的输出只能作为候选输入，必须登记来源与降级方案，不能绕过确认、资产冻结或验收。
 - 输出可由前端实现、QA 验证的完整状态、行为、响应式和无障碍说明。
 - 不得修改前后端业务代码、迁移、运行配置或测试代码。
 - 不得生成或委派新的 subagent；不得修改 `docs/team/STATUS.md`。
