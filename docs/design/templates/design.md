@@ -3,7 +3,7 @@
 - 状态：`draft` | `approved` | `implemented`
 - 方案版本：`方案 Vn`
 - 关联规格：`docs/product/<feature>.md`
-- 关联计划：`docs/plans/active/<plan>.md`
+- 关联计划：`docs/plans/active/<task-id>/plan.md`
 - 创建：YYYY-MM-DD
 - 最后更新：YYYY-MM-DD
 

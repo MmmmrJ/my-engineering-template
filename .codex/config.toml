@@ -33,6 +33,6 @@ statusMessage = "Checking Bash command"
 
 [[hooks.Stop.hooks]]
 type = "command"
-command = 'node "$(git rev-parse --show-toplevel)/scripts/harness/cli.mjs" verify'
+command = 'node "$(git rev-parse --show-toplevel)/scripts/harness/cli.mjs" verify --profile fast'
 timeout = 120
 statusMessage = "Running completion verify"

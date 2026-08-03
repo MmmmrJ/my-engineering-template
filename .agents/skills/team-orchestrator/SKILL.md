@@ -19,9 +19,11 @@ description: "Orchestrate approval-gated product delivery across product managem
 - 同时运行不超过 3 个直接 subagent；平台限制更低时遵守更低限制。
 - 禁止 subagent 生成下级 agent。即使平台支持嵌套委派，也只允许父 Agent 委派。
 - 只让父 Agent 修改 `docs/team/STATUS.md`；subagent 只在最终回复中返回状态行。
+- 只让父 Agent 运行 `task create/approve/phase/complete`。subagent 只能读取 `governance.json`、执行被委派的检查并返回证据，不得改变阶段、批准方案或接受风险。
 - 强制分阶段推进：先形成方案并等待用户明确确认，确认前不得进入实现；确认后自动完成开发和最终验收。
 - 不得从沉默、超时、模糊回复、旧方案确认或“继续看看”等表达推断批准。只有用户明确确认当前最新方案版本，才解除开发门禁。
 - 保留用户和其他角色的无关改动；多个角色可能写同一文件时改为顺序执行并指定唯一所有者。
+- 受治理路径的写入必须存在唯一 active task，且落在该角色的允许路径并避开禁止路径；机械门禁失败时不得用提示词判断替代。
 
 ## 使用固定角色与 Skills
 
@@ -55,9 +57,11 @@ description: "Orchestrate approval-gated product delivery across product managem
 
 产品和 UI 可在边界清楚时并行；前后端可在方案阶段只读检查并提出 API、数据、文件影响和实施计划；QA 可提前制定测试计划。所有实现与最终验收必须等待用户确认最新方案。
 
-### 3. 初始化并发布状态
+### 3. 初始化任务并发布状态
 
-在委派前由父 Agent 更新 `docs/team/STATUS.md`：参与角色设为 `已排队`，不参与角色设为 `跳过`。在父任务中发布同版简表，再开始委派。
+在委派前由父 Agent 运行 `node scripts/harness/cli.mjs task create <task-id> --title "<标题>" --version V1`。仓库一次只允许一个 active task；若命令发现已有任务，先继续或关闭该任务，不得新建并行父任务。
+
+父 Agent 在 `docs/plans/active/<task-id>/plan.md` 写入人类可读方案，并在同目录 `governance.json` 登记参与角色、允许/禁止路径、默认 skill、用户点名能力及降级、必跑检查。随后更新 `docs/team/STATUS.md`：参与角色设为 `已排队`，不参与角色设为 `跳过`，并在父任务中发布同版简表。
 
 固定字段：
 
@@ -77,11 +81,11 @@ description: "Orchestrate approval-gated product delivery across product managem
 - 前后端实施步骤、文件影响、依赖顺序和责任角色。
 - 测试计划、验收标准、风险和待决项。
 
-把实际承担并完成方案任务的角色设为 `待用户确认`；这可以包含产品、UI，也可以包含提供技术计划的前端、后端或 QA。仅被选中但未承担方案任务的后续实现/验收角色保持 `已排队`。总控状态使用精确枚举值 `待用户确认`，把 `方案 Vn` 写入当前任务或产出/进度字段，然后停止开发并请求用户审核。不得把方案交付表述为需求已完成。
+把实际承担并完成方案任务的角色设为 `待用户确认`；这可以包含产品、UI，也可以包含提供技术计划的前端、后端或 QA。仅被选中但未承担方案任务的后续实现/验收角色保持 `已排队`。父 Agent 将任务阶段设为 `awaiting_approval`，总控状态使用精确枚举值 `待用户确认`，把 `方案 Vn` 写入状态和治理记录，然后停止开发并请求用户审核。不得把方案交付表述为需求已完成。
 
 ### 5. 执行用户审核循环
 
-- 只有用户明确表达“确认”“同意”“按此执行”“开始开发”或语义等价的批准，并且指向当前最新 `方案 Vn`，才记录确认版本和时间。
+- 只有用户明确表达“确认”“同意”“按此执行”“开始开发”或语义等价的批准，并且指向当前最新 `方案 Vn`，父 Agent 才运行 `node scripts/harness/cli.mjs task approve <task-id> --version Vn --by user --evidence "<确认摘要>"` 记录确认版本和时间。
 - 用户提出不满意、修改意见或新约束时，识别受影响角色，保持所有开发角色不启动，回到方案阶段修订；递增版本号并列出相对上一版的变更，再提交用户审核。
 - 用户只确认部分内容时，记录已认可部分，但整个方案仍保持门禁，直到用户明确确认完整最新版本。
 - 回复含义不清时只澄清是否批准，不得开始开发。
@@ -90,7 +94,7 @@ description: "Orchestrate approval-gated product delivery across product managem
 
 ### 6. 分批实施
 
-每个实现委派提示都写明：`用户已确认：方案 Vn`、确认范围、目标、依赖、默认共享 skill 路径、允许和禁止修改的路径、预期交付物、必须运行的验证、完成标准、用户点名能力及其已登记产物、可选平台增强及其触发条件，以及最终状态行格式。缺少明确确认记录时，前端、后端和 QA 不得执行实现或最终验收。启动后立即把该角色更新为 `进行中`。
+父 Agent 在任何实现委派前运行 `node scripts/harness/cli.mjs task validate <task-id> --phase implementation`，通过后将阶段推进为 `implementing`。每个实现委派提示都写明：`用户已确认：方案 Vn`、确认范围、目标、依赖、默认共享 skill 路径、允许和禁止修改的路径、预期交付物、必须运行的验证、完成标准、用户点名能力及其已登记产物、可选平台增强及其触发条件，以及最终状态行格式。缺少确认记录或机械校验失败时，前端、后端和 QA 不得执行实现或最终验收。启动后立即把该角色更新为 `进行中`。
 
 涉及页面、用户流程、交互、响应式或视觉设计时，委派 UI 角色创建 `docs/design/<feature>/design.md`、`prototypes/` 下的本地原型图及 `assets/manifest.md`；UI 角色独占视觉方向、资产入库、资产冻结和偏差判定。委派前端时必须给出设计目录，要求先运行 `validate-design` 并确认冻结资产，禁止自行新增模块、替换图片/图标或重新设计；委派 QA 时必须把设计目录作为视觉、交互与资产验收基线。Feature Spec 如确实不涉及 UI，必须明确标注 `设计交付：not-applicable`。
 
@@ -115,12 +119,12 @@ description: "Orchestrate approval-gated product delivery across product managem
 
 ### 8. 收敛和最终验收
 
-等待所有实现角色完成后才启动最终验收。QA 必须以用户确认的方案版本为基线，检查越界修改、契约一致性和验收标准，并运行与风险相称的格式、静态检查、构建、自动化和真实流程测试。无法运行的检查必须记录原因、替代证据和剩余风险。
+等待所有实现角色完成后，由父 Agent 把其治理状态和证据写入 `governance.json`，运行 `task validate <task-id> --phase acceptance`；只有通过后才能把阶段推进为 `accepting` 并启动最终验收。QA 必须以用户确认的方案版本为基线，检查越界修改、契约一致性和验收标准，并运行与风险相称的格式、静态检查、构建、自动化和真实流程测试。无法运行的检查必须记录原因、替代证据和剩余风险。
 
 最终验收发现缺陷时，父 Agent 将缺陷交回责任角色修复，再由 QA 复验；修复不改变已确认设计时自动推进，改变设计时回到用户审核循环。
 
-只有在所有参与角色为 `完成`，或剩余项已被用户明确接受时，才能关闭需求。最终回复包含实际交付内容、交付物路径、逐项验收结果、测试证据、遗留风险和下一步，并确保 `STATUS.md` 与父任务状态一致。不得只回复“已完成”“已生成方案”之类的完成摘要；必须直接呈现用户所需的方案或结果正文。
+QA 结论以 `{checkId:"qa-acceptance",status:"pass",evidence:"..."}` 写入 `acceptance.results`；其他每条必跑检查也使用 `{checkId,status,evidence}`，同时记录剩余风险及其用户接受。父 Agent 先运行 `task validate <task-id> --phase complete`，再运行 `task complete <task-id>`；命令负责归档整个任务目录并将 `STATUS.md` 自动复位为待命。只有所有参与角色完成，或剩余项已被用户明确接受时，才能关闭需求。最终回复包含实际交付内容、交付物路径、逐项验收结果、测试证据、遗留风险和下一步。不得只回复“已完成”“已生成方案”之类的完成摘要；必须直接呈现用户所需的方案或结果正文。
 
 ## 移植到其他项目
 
-由父 Agent 执行迁移并写入目标项目的状态文件；subagent 只辅助检查或返回建议。优先使用 `node scripts/harness/cli.mjs install --merge <target>`；不要覆盖目标项目已有的 `AGENTS.md`，只合并 `team-orchestrator:start` 与 `team-orchestrator:end` 标记之间的路由区块。棕地仓库先用 `onboard-repository` 产出提案并经用户确认。重置状态表为五个角色 `待命`，然后在 Codex 和 Cursor 中分别启动新任务验证发现、角色名称映射与自动触发。运行 `node scripts/harness/cli.mjs doctor --strict` 做安装后体检。
+由父 Agent 执行迁移并写入目标项目的状态文件；subagent 只辅助检查或返回建议。优先使用 `node scripts/harness/cli.mjs install --merge <target>`；不要覆盖目标项目已有的 `AGENTS.md`，只合并 `team-orchestrator:start` 与 `team-orchestrator:end` 标记之间的路由区块。棕地仓库先用 `onboard-repository` 产出提案并经用户确认。随后运行 `init --project` 建立干净状态与 lock，在 Codex 和 Cursor 中分别验证发现、角色名称映射与自动触发，并以 `node scripts/harness/cli.mjs doctor --project --strict` 做安装后体检。

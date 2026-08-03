@@ -2,7 +2,20 @@
 
 先判断请求规模，再决定流程重量。不要把小改动套进完整团队编排。
 
-## 四级流程
+## 任务生命周期
+
+每次实施只允许一个 active task。父 Agent 创建任务并维护其 `governance.json`；subagent 只能返回自己的状态和证据，不得改变任务阶段。
+
+```text
+planning → awaiting_approval → approved → implementing → accepting → completed / blocked
+```
+
+- `task create <id>`：创建 `docs/plans/active/<id>/plan.md` 与 `governance.json`。
+- `task approve <id> --version Vn ...`：仅在用户明确确认当前版本后记录批准。
+- `task phase`：按合法状态机推进；实现角色未完成时不能进入验收。
+- `task complete`：验证全部参与角色、保留字 `qa-acceptance` 的 QA 通过结论、必跑检查证据和剩余风险后归档，并自动重置团队状态；业务任务归档到 `docs/plans/completed/`，模板模式的自身演进归档到 `docs/harness/history/`。
+
+## 四级请求处理
 
 ### 1. 只读问答
 
@@ -17,16 +30,17 @@
 设计不变、契约不变的局部修复（文案、样式、明确 bugfix）。
 
 - 可不启动完整团队；直接改相关文件
-- 改完运行 `node scripts/harness/cli.mjs verify`（或业务仓配置的等价检查）
+- 若文件命中 `governedPaths`，仍必须创建任务、登记所有权并取得适用的确认；“小改”只减轻角色数量，不绕过机械门禁
+- 改完运行 `node scripts/harness/cli.mjs verify --profile fast`
 - 若发现需要改交互/契约/验收标准，升级到第 3 或第 4 级
 
 ### 3. 多会话或协调型变更
 
 跨多模块、需跨会话跟踪、或多人角色协作的实现。
 
-- 在 `docs/plans/active/` 创建 exec-plan（用 [templates/exec-plan.md](templates/exec-plan.md)）
+- 使用 `task create` 创建结构化 active task，并在 `plan.md` 中维护执行计划
 - 涉及产品行为 / UI / API / 数据 / 自动化测试时启动 `team-orchestrator`
-- 进度、决策、验证写进计划文件；完成后移到 `docs/plans/completed/`
+- 进度、决策、验证写进任务目录；通过完成门禁后由 `task complete` 归档到当前模式对应的历史目录
 - 新增或改变页面、用户流程、交互、响应式布局或视觉设计时，UI 角色必须在方案阶段提交 `docs/design/<feature>/design.md`、`prototypes/` 下的本地原型图和 `assets/manifest.md`；用户确认后冻结资产与设计。前端实现前运行 `validate-design`，最终 QA 将同条件截图、资产版本和 P0/P1/P2 偏差记录写入 `verification.md` 后运行 `validate-visual`
 
 ### 4. 后果性歧义
@@ -43,10 +57,10 @@
 
 不启动：普通问答、概念解释、状态查询、仅讨论想法、只读检查或评审。
 
-流程摘要：`需求 → 方案 Vn → 用户明确确认 → 开发 → 最终 QA → 交付`。确认前禁止改生产代码、迁移、运行配置或测试实现。
+流程摘要：`需求 → 方案 Vn → 用户明确确认 → task approve → 开发 → 最终 QA → task complete`。确认前修改 governed paths 会被本地 hooks 与 CI 阻断。
 
 ## 状态与计划
 
 - 团队角色状态：`docs/team/STATUS.md`（仅父 Agent 更新）
-- Durable 计划：`docs/plans/active/*.md`
+- Durable 计划：`docs/plans/active/<task-id>/{plan.md,governance.json}`
 - 架构决策：`docs/decisions/`

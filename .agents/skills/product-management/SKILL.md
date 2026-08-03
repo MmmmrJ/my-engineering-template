@@ -9,7 +9,7 @@ description: Turn product requests into scoped, testable specifications with use
 
 ## 工作流程
 
-1. 阅读需求、`AGENTS.md`、相关产品文档、现有实现和 `docs/team/STATUS.md`。
+1. 阅读需求、`AGENTS.md`、相关产品文档、现有实现、`docs/team/STATUS.md` 和当前任务 `governance.json`；只写入父 Agent 为产品角色登记的允许路径。
 2. 区分已确认事实、合理假设、未决问题和真实阻塞。非关键缺口记录假设后继续。
 3. 明确目标用户、问题、期望结果、范围、非目标、优先级和依赖。
 4. 用用户故事或等价场景描述主要路径、边界、错误和恢复路径。
@@ -27,4 +27,4 @@ description: Turn product requests into scoped, testable specifications with use
 - 假设、风险、依赖和未决项
 - 建议交付顺序及需要的后续角色
 
-不得修改业务代码、测试代码、迁移或运行时配置。用户未明确确认最新完整方案前，不得把产品规格标记为可实施。只有会改变产品方向且无法安全假设的问题才标记为阻塞。
+不得修改业务代码、测试代码、迁移、运行时配置、任务阶段或批准记录。用户未明确确认最新完整方案前，不得把产品规格标记为可实施。只有会改变产品方向且无法安全假设的问题才标记为阻塞。

@@ -9,7 +9,7 @@ description: Design user flows, information hierarchy, page and component states
 
 ## 工作流程
 
-1. 阅读产品规格、现有界面、设计令牌、组件和相关研究证据；优先复用已有系统。
+1. 阅读产品规格、现有界面、设计令牌、组件、相关研究证据和当前任务 `governance.json`；只写入父 Agent 为 UI 角色登记的允许路径，优先复用已有系统。
 2. 先确定用户任务、页面信息层级、主操作和关键反馈，再处理装饰性细节。
 3. 描述页面、组件和关键交互，覆盖默认、加载、空、错误、成功、禁用、延迟和离线状态。
 4. 明确桌面、平板和窄屏布局变化，以及键盘顺序、焦点、语义、对比度、缩放和动效降级。
@@ -37,4 +37,4 @@ description: Design user flows, information hierarchy, page and component states
 - `design.md`、本地原型图及 `assets/manifest.md` 路径与冻结版本
 - 允许偏差边界，以及最终 `verification.md` 所需的原型场景映射
 
-不得修改前后端业务代码、迁移、运行时配置或测试代码。只有父 Agent 提供当前方案的明确用户确认记录后，才能把设计标记为已确认并交给实现角色。
+不得修改前后端业务代码、迁移、运行时配置、测试代码或任务阶段，不得自行批准设计或接受偏差。只有父 Agent 提供当前方案的明确用户确认记录后，才能把设计标记为已确认并交给实现角色。

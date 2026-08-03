@@ -1,6 +1,6 @@
 {
   "name": "harness-runtime",
-  "version": "1.0.0",
+  "version": "3.0.0",
   "private": true,
   "description": "Cross-platform, dependency-free runtime for the engineering harness.",
   "type": "module",
@@ -10,8 +10,10 @@
   "scripts": {
     "harness": "node scripts/harness/cli.mjs",
     "harness:init": "node scripts/harness/cli.mjs init",
-    "harness:doctor": "node scripts/harness/cli.mjs doctor",
-    "harness:verify": "node scripts/harness/cli.mjs verify",
+    "harness:doctor": "node scripts/harness/cli.mjs doctor --strict",
+    "harness:verify": "node scripts/harness/cli.mjs verify --profile full",
+    "harness:sync-agents": "node scripts/harness/cli.mjs sync-agents --check",
+    "harness:guard-secrets": "node scripts/harness/cli.mjs guard-secrets --tracked",
     "harness:validate-spec": "node scripts/harness/cli.mjs validate-spec",
     "harness:validate-design": "node scripts/harness/cli.mjs validate-design",
     "harness:validate-visual": "node scripts/harness/cli.mjs validate-visual",

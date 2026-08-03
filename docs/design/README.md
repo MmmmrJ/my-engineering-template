@@ -38,4 +38,4 @@ Feature Spec 的“设计交付”标记为 `required` 时，`validate-spec` 会
 node scripts/harness/cli.mjs validate-visual docs/design/<feature>
 ```
 
-只有验收结论为 `pass`、所有原型场景都有实现截图、资产一致性为 `pass`，且偏差已按 P0/P1/P2 门禁处理后，UI 验收才能通过。完整工作流见 [使用 Codex Product Design 生成原型并保持实现一致的方法](使用Codex%20Product%20Design生成原型并保持实现一致的方法.md)。
+只有验收结论为 `pass`、所有原型场景都有实现截图、资产一致性为 `pass`，且偏差已按 P0/P1/P2 门禁处理后，UI 验收才能通过。本文件、设计模板、资产清单模板和视觉验收模板共同构成完整工作流。

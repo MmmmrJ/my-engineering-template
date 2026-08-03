@@ -1,2 +1,4 @@
 #!/bin/sh
-exec node "$(git rev-parse --show-toplevel)/scripts/harness/cli.mjs" verify
+root="$(git rev-parse --show-toplevel)" || exit 1
+node "$root/scripts/harness/cli.mjs" guard-secrets --staged || exit $?
+exec node "$root/scripts/harness/cli.mjs" verify --profile fast

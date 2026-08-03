@@ -1,6 +1,6 @@
 # 五角色 Skill 与平台兼容矩阵
 
-本项目采用“共享基础 skill + 平台可选增强”结构。`.agents/skills/` 是 Codex 与 Cursor 的共同能力来源；任何增强缺失都必须回退到共享 skill，不得阻塞基础工作。
+本项目采用“共享基础 skill + 平台可选增强”结构。`.agents/team.config.json` 是角色映射的机器真源，`.agents/skills/` 是 Codex 与 Cursor 的共同能力来源；任何增强缺失都必须回退到共享 skill，不得阻塞基础工作。
 
 ## 角色映射
 
@@ -23,6 +23,7 @@
 - `security-best-practices` 只在明确的安全审查或安全加固请求中使用，不能因为“后端/前端开发”而自动触发。
 - `onboard-repository` 默认只读；未确认提案不得覆盖 `AGENTS.md` 或业务代码。
 - 所有增强都继承角色原有写入边界，不能授权 subagent 生成下级 agent 或修改 `docs/team/STATUS.md`。
+- subagent 不能运行 `task create/approve/phase/complete` 或自行接受风险；父 Agent 必须把能力、边界和验收要求写入当前任务的 `governance.json`。
 - 用户点名 skill 或插件时，父 Agent 必须登记请求能力、适用角色、输入、候选产物、预期设计交付与降级方式；其产物不构成实施批准，也不能免除本地资产、设计冻结和视觉验收要求。
 
 ## 页面与交互设计交付门禁
@@ -45,10 +46,12 @@
 ## 兼容性说明
 
 - 共享层：`SKILL.md` 位于 `.agents/skills/<name>/`，名称只用小写字母、数字和连字符，并与目录名一致。
-- Codex 层：`.codex/agents/*.toml` 可以引用当前 Codex 安装态中的插件/个人 skills；迁移后应重新检查可用性。
-- Cursor 层：`.cursor/agents/*.md` 使用连字符名称与 `model: inherit`；不得包含 `plugin://`、Codex 用户目录或 Codex 专属 skill 标识。
+- 角色真源：`.agents/team.config.json` 集中维护角色 ID、平台名称、共享 skill、职责、边界和可选 overlay。
+- Codex 层：`.codex/agents/*.toml` 是生成产物，可包含配置中声明的 Codex 可选 overlay；迁移后应重新检查可用性。
+- Cursor 层：`.cursor/agents/*.md` 是生成产物，使用连字符名称与 `model: inherit`；不得包含 `plugin://`、Codex 用户目录或 Codex 专属 skill 标识。
 - `agents/openai.yaml` 是 Codex 展示元数据，Cursor 可忽略，不能作为 Cursor 执行前提。
-- 机械护栏：`node scripts/harness/cli.mjs guard` + `.cursor/hooks.json` / `.codex/config.toml` / `.githooks/`。
+- 生成一致性：修改角色真源后运行 `node scripts/harness/cli.mjs sync-agents --write`；CI 使用 `sync-agents --check` 检测手工修改和漂移。
+- 机械护栏：`task validate`、`verify --profile fast|full|ci`、`guard-secrets` 与 `.cursor/hooks.json` / `.codex/config.toml` / `.githooks/`。
 
 ## 推荐验收用例
 
@@ -60,4 +63,5 @@
 6. “把 harness 装进这个旧仓库”选择 `onboard-repository`，确认后再写入。
 7. 在 Cursor 中执行跨前后端需求，确认所有角色只依赖 `.agents/skills/`，且缺少 Codex 插件不会阻塞。
 8. 输入新需求后确认只产出 `方案 V1` 且不修改实现；反馈“不满意”后确认生成 V2 并再次等待；明确批准 V2 后才启动开发和最终 QA。
-9. `node scripts/harness/cli.mjs guard "git push --force"` 被拦截；`node scripts/harness/cli.mjs doctor --strict` 通过。
+9. `node scripts/harness/cli.mjs guard "git push --force"` 被拦截；`node scripts/harness/cli.mjs doctor --project --strict` 通过。
+10. 手工修改任一生成的 Codex/Cursor agent 文件后，`sync-agents --check` 失败。

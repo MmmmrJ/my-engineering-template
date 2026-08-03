@@ -9,7 +9,7 @@ description: Implement frontend features from approved product, UI, and API cont
 
 ## 工作流程
 
-1. 检查父 Agent 是否提供 `用户已确认：方案 Vn` 及确认范围。缺少记录时只能只读检查并输出实施计划，禁止修改前端代码、配置或测试。
+1. 检查父 Agent 是否提供 `用户已确认：方案 Vn`，并读取唯一 active task 的 `governance.json`。确认版本不一致、角色未登记、路径不在允许范围或命中禁止路径时，只能只读检查并报告父 Agent。
 2. 阅读已确认的验收标准、UI 状态、公开 API 契约、现有架构和测试惯例。若涉及页面或交互，必须读取 `docs/design/<feature>/design.md`、本地原型图与 `assets/manifest.md`，确认设计和资产均已冻结并先运行 `validate-design`；缺失或未冻结时交回父 Agent，不得自行推断设计、替换资产或重新设计。
 3. 明确客户端与服务端状态所有权；权威业务状态以服务端结果为准。
 4. 用现有组件和令牌实现页面与交互，覆盖加载、空、错误、成功、离线和延迟状态。
@@ -23,4 +23,5 @@ description: Implement frontend features from approved product, UI, and API cont
 - 不修改后端业务逻辑、数据库模型或迁移；需要契约变化时先交给总控协调。
 - 视觉创作、图像转代码、URL 克隆和真实浏览器自动化属于条件增强；缺失时使用现有设计与项目测试继续工作。
 - 平台增强能力不得扩大写入范围，也不得替代项目契约和验收标准。
+- 不得运行任务状态变更命令、自行修改治理记录、批准方案或接受风险；只向父 Agent 返回修改清单、检查结果和证据。
 - 实现中发现必须改变已确认交互、范围、契约或验收标准时停止受影响工作并报告父 Agent，不得自行变更设计。

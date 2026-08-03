@@ -1,11 +1,14 @@
 {
-  "schemaVersion": 1,
-  "projectChecksRequired": false,
-  "commands": {
-    "precommit": [],
-    "typecheck": [],
-    "lint": [],
-    "test": []
+  "schemaVersion": 2,
+  "mode": "template",
+  "governedPaths": [
+    "apps/**",
+    "packages/**"
+  ],
+  "checks": {
+    "fast": [],
+    "full": [],
+    "ci": []
   },
   "boundaries": []
 }

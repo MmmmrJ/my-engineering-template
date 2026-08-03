@@ -16,7 +16,7 @@
     ],
     "stop": [
       {
-        "command": "node scripts/harness/cli.mjs verify",
+        "command": "node scripts/harness/cli.mjs verify --profile fast",
         "timeout": 120
       }
     ]

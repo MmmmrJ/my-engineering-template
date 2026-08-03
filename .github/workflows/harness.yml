@@ -18,12 +18,13 @@ jobs:
         node: [20, 24]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-          cache: npm
-      - run: npm ci
-      - run: npm test
-      - run: node scripts/harness/cli.mjs init
+      - run: node scripts/harness/run-tests.mjs
+      - run: node scripts/harness/cli.mjs sync-agents --check
+      - run: node scripts/harness/cli.mjs guard-secrets --tracked
       - run: node scripts/harness/cli.mjs doctor --strict
-      - run: node scripts/harness/cli.mjs verify
+      - run: node scripts/harness/cli.mjs verify --profile ci

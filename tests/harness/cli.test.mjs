@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -8,21 +9,18 @@ import { fileURLToPath } from 'node:url';
 const REPOSITORY = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 function fixture() {
-  const sandbox = mkdtempSync(join(REPOSITORY, '.harness-test-'));
+  const sandbox = mkdtempSync(join(tmpdir(), 'harness-test-'));
   const root = join(sandbox, 'harness');
-  const sources = [
-    'AGENTS.md', 'README.md', '.gitignore', '.env.example', 'package.json', 'harness.config.json', 'harness.config.example.json',
-    '.codex/config.toml', '.cursor/hooks.json', '.githooks/pre-commit', '.githooks/pre-push',
-    'docs/README.md', 'docs/HARNESS.md', 'docs/WORKFLOW.md', 'docs/ARCHITECTURE.md',
-    'docs/templates/exec-plan.md', 'docs/team/STATUS.md', 'docs/team/SKILL_MATRIX.md', 'docs/product/templates/feature-spec.md',
-    'docs/design/README.md', 'docs/design/templates/design.md', 'docs/design/templates/verification.md', 'docs/design/templates/assets/manifest.md',
-    '.agents/skills', '.codex/agents', '.cursor/agents', 'scripts/harness',
-  ];
-  for (const source of sources) {
-    const destination = join(root, source);
-    mkdirSync(dirname(destination), { recursive: true });
-    cpSync(join(REPOSITORY, source), destination, { recursive: true });
-  }
+  cpSync(REPOSITORY, root, {
+    recursive: true,
+    filter(source) {
+      const local = source.slice(REPOSITORY.length).replaceAll('\\', '/').replace(/^\//, '');
+      return !local.split('/').some((part) => ['.git', 'node_modules', 'coverage', 'dist'].includes(part));
+    },
+  });
+  rmSync(join(root, 'docs', 'plans', 'active'), { recursive: true, force: true });
+  mkdirSync(join(root, 'docs', 'plans', 'active'), { recursive: true });
+  writeIdleStatus(root);
   return root;
 }
 
@@ -41,10 +39,136 @@ function cliFromStdin(root, input, ...args) {
   });
 }
 
+function cliWithEnv(root, env, ...args) {
+  return spawnSync(process.execPath, ['scripts/harness/cli.mjs', ...args], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, ...env },
+  });
+}
+
+function output(result) {
+  return `${result.stdout}\n${result.stderr}`;
+}
+
 function withFixture(t) {
   const root = fixture();
   t.after(() => rmSync(dirname(root), { recursive: true, force: true }));
   return root;
+}
+
+function gitCli(root, ...args) {
+  return spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+}
+
+function initGit(root) {
+  assert.equal(gitCli(root, 'init').status, 0);
+  assert.equal(gitCli(root, 'config', 'user.name', 'Harness Test').status, 0);
+  assert.equal(gitCli(root, 'config', 'user.email', 'harness@example.test').status, 0);
+  assert.equal(gitCli(root, 'config', 'core.hooksPath', '.githooks').status, 0);
+}
+
+function commitAll(root, message = 'fixture baseline') {
+  assert.equal(gitCli(root, 'add', '-A').status, 0);
+  const committed = gitCli(root, '-c', 'core.hooksPath=/dev/null', 'commit', '--no-gpg-sign', '-m', message);
+  assert.equal(committed.status, 0, committed.stderr);
+}
+
+function writeIdleStatus(root) {
+  writeFileSync(join(root, 'docs', 'team', 'STATUS.md'), `# 团队状态
+
+## 当前需求
+
+- 需求：—
+- 入口：—
+- 总控状态：待命
+- 最后同步：—
+
+## 角色状态
+
+| 角色 | 当前任务 | 状态 | 产出/进度 | 阻塞 | 下一步 | 更新时间 |
+|---|---|---|---|---|---|---|
+| 产品经理 | — | 待命 | — | 无 | 等待下一需求 | — |
+| UI设计 | — | 待命 | — | 无 | 等待下一需求 | — |
+| 前端开发 | — | 待命 | — | 无 | 等待下一需求 | — |
+| 后端开发 | — | 待命 | — | 无 | 等待下一需求 | — |
+| 测试工程师 | — | 待命 | — | 无 | 等待下一需求 | — |
+`);
+}
+
+function check(id = 'fixture-check') {
+  return {
+    id,
+    program: process.execPath,
+    args: ['-e', 'process.exit(0)'],
+    cwd: '.',
+    timeoutMs: 5000,
+  };
+}
+
+function configV2(mode = 'template', profiles = {}) {
+  return {
+    schemaVersion: 2,
+    mode,
+    governedPaths: ['apps/**'],
+    checks: {
+      fast: profiles.fast ?? [],
+      full: profiles.full ?? [],
+      ci: profiles.ci ?? [],
+    },
+    boundaries: [],
+    secretAllowlist: '.harness-secret-allowlist',
+  };
+}
+
+function writeConfig(root, config) {
+  writeFileSync(join(root, 'harness.config.json'), `${JSON.stringify(config, null, 2)}\n`);
+}
+
+function governance(taskId, overrides = {}) {
+  const base = {
+    schemaVersion: 1,
+    taskId,
+    title: `Fixture ${taskId}`,
+    phase: 'implementing',
+    planVersion: 'V1',
+    approvedVersion: 'V1',
+    approval: {
+      status: 'approved',
+      approvedBy: 'user',
+      approvedAt: '2026-08-03T10:50:00+08:00',
+      evidence: '用户已确认：方案 V1',
+    },
+    roles: [
+      { role: 'parent', status: 'completed', allowedPaths: ['docs/**'], forbiddenPaths: ['tests/**'], requiredSkill: 'team-orchestrator' },
+      { role: 'backend_engineer', status: 'completed', allowedPaths: ['apps/**'], forbiddenPaths: ['apps/frontend/secret/**'], requiredSkill: 'backend-engineering' },
+      { role: 'qa_engineer', status: 'completed', allowedPaths: ['tests/**'], forbiddenPaths: ['secrets/**'], requiredSkill: 'quality-engineering' },
+    ],
+    capabilities: [],
+    requiredChecks: ['harness-tests', 'qa-acceptance'],
+    acceptance: {
+      results: [
+        { checkId: 'harness-tests', status: 'pass', evidence: 'node test: PASS' },
+        { checkId: 'qa-acceptance', status: 'pass', evidence: 'QA: PASS' },
+      ],
+      remainingRisks: [],
+      acceptedByUser: null,
+    },
+  };
+  return {
+    ...base,
+    ...overrides,
+    approval: { ...base.approval, ...(overrides.approval ?? {}) },
+    acceptance: { ...base.acceptance, ...(overrides.acceptance ?? {}) },
+  };
+}
+
+function writeTask(root, taskId, overrides = {}) {
+  const directory = join(root, 'docs', 'plans', 'active', taskId);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, 'plan.md'), `# Exec Plan: ${taskId}\n\n- 方案版本：V1\n`);
+  writeFileSync(join(directory, 'governance.json'), `${JSON.stringify(governance(taskId, overrides), null, 2)}\n`);
+  return directory;
 }
 
 test('guard permits ordinary commands and blocks unsafe commands', (t) => {
@@ -213,24 +337,382 @@ test('validate-visual rejects version, scenario-data, asset consistency and uncl
   }
 });
 
-test('verify passes for the empty template configuration', (t) => {
+test('config migration previews schema V1 without writes and explicitly preserves commands in schema V2', (t) => {
   const root = withFixture(t);
-  const result = cli(root, 'verify');
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /verify: PASS/);
-  assert.match(result.stdout, /project checks disabled for empty template/);
+  const legacy = {
+    schemaVersion: 1,
+    projectChecksRequired: true,
+    commands: {
+      precommit: [{ program: process.execPath, args: ['-e', 'process.exit(0)'] }],
+      typecheck: [],
+      lint: [],
+      test: [{ program: process.execPath, args: ['-e', 'process.exit(0)'] }],
+    },
+    boundaries: [{ from: 'apps/**', forbidden: 'forbidden-import' }],
+  };
+  writeConfig(root, legacy);
+  const before = readFileSync(join(root, 'harness.config.json'), 'utf8');
+
+  const implicitInit = cli(root, 'init', '--project');
+  assert.notEqual(implicitInit.status, 0);
+  assert.match(output(implicitInit), /migrate|schema V2/i);
+  assert.equal(readFileSync(join(root, 'harness.config.json'), 'utf8'), before);
+
+  const preview = cli(root, 'config', 'migrate', '--dry-run');
+  assert.equal(preview.status, 0, output(preview));
+  assert.equal(readFileSync(join(root, 'harness.config.json'), 'utf8'), before);
+  assert.match(output(preview), /dry.?run|preview|schemaVersion.?2/i);
+
+  const applied = cli(root, 'migrate-config', '--apply');
+  assert.equal(applied.status, 0, output(applied));
+  const migrated = JSON.parse(readFileSync(join(root, 'harness.config.json'), 'utf8'));
+  assert.equal(migrated.schemaVersion, 2);
+  assert.equal(migrated.mode, 'project');
+  assert.deepEqual(migrated.boundaries, legacy.boundaries);
+  assert.ok(Array.isArray(migrated.checks.fast));
+  assert.ok(Array.isArray(migrated.checks.full));
+  assert.ok(Array.isArray(migrated.checks.ci));
+  assert.match(JSON.stringify(migrated.checks), /process\.exit\(0\)/);
 });
 
-test('verify fails when project checks are required but none are configured', (t) => {
+test('schema V2 validates profile entries and runs a configured profile', (t) => {
   const root = withFixture(t);
-  const configPath = join(root, 'harness.config.json');
-  const config = JSON.parse(readFileSync(configPath, 'utf8'));
-  config.projectChecksRequired = true;
-  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  writeConfig(root, configV2('template', { fast: [check('fast-pass')] }));
+  const valid = cli(root, 'verify', '--profile', 'fast');
+  assert.equal(valid.status, 0, output(valid));
+  assert.match(valid.stdout, /fast-pass|verify: PASS/);
 
-  const result = cli(root, 'verify');
+  const invalidConfig = configV2('template', { fast: [check('invalid-timeout')] });
+  invalidConfig.checks.fast[0].timeoutMs = 0;
+  writeConfig(root, invalidConfig);
+  const invalid = cli(root, 'verify', '--profile', 'fast');
+  assert.notEqual(invalid.status, 0);
+  assert.match(output(invalid), /timeoutMs|positive integer|checks\.fast/i);
+});
+
+test('empty template profiles pass while project full and ci profiles fail closed', (t) => {
+  const root = withFixture(t);
+  writeConfig(root, configV2('template'));
+  for (const profile of ['fast', 'full', 'ci']) {
+    const result = cli(root, 'verify', '--profile', profile);
+    assert.equal(result.status, 0, `${profile}: ${output(result)}`);
+    assert.match(result.stdout, /verify: PASS/);
+  }
+
+  writeConfig(root, configV2('project'));
+  const fast = cli(root, 'verify', '--profile', 'fast');
+  assert.equal(fast.status, 0, output(fast));
+  for (const profile of ['full', 'ci']) {
+    const result = cli(root, 'verify', '--profile', profile);
+    assert.notEqual(result.status, 0, profile);
+    assert.match(output(result), new RegExp(`${profile}.*(?:empty|no checks|not configured)|(?:empty|no checks|not configured).*${profile}`, 'i'));
+  }
+});
+
+test('doctor template strict detects Markdown links, non-idle status, active tasks and generated agent drift', (t) => {
+  const cases = [
+    ['broken Markdown link', (root) => writeFileSync(join(root, 'docs', 'README.md'), `${readFileSync(join(root, 'docs', 'README.md'), 'utf8')}\n[missing](missing.md)\n`), /link|missing\.md|断链/i],
+    ['non-idle status', (root) => {
+      replace(root, 'docs/team/STATUS.md', '- 需求：—', '- 需求：still-running');
+      replace(root, 'docs/team/STATUS.md', '- 总控状态：待命', '- 总控状态：进行中');
+    }, /STATUS|待命|idle/i],
+    ['active task', (root) => writeTask(root, 'unexpected-active'), /active|unexpected-active|任务/i],
+    ['agent drift', (root) => writeFileSync(join(root, '.codex', 'agents', 'qa_engineer.toml'), `${readFileSync(join(root, '.codex', 'agents', 'qa_engineer.toml'), 'utf8')}\n# drift\n`), /agent|drift|sync/i],
+    ['managed file deletion', (root) => rmSync(join(root, '.githooks', 'pre-push')), /manifest|pre-push|file/i],
+  ];
+  for (const [name, mutate, expected] of cases) {
+    const root = withFixture(t);
+    writeConfig(root, configV2('template'));
+    initGit(root);
+    mutate(root);
+    const result = cli(root, 'doctor', '--template', '--strict');
+    assert.notEqual(result.status, 0, `${name}: ${output(result)}`);
+    assert.match(output(result), expected, name);
+  }
+});
+
+test('doctor template strict accepts a clean idle and synchronized release fixture', (t) => {
+  const root = withFixture(t);
+  writeConfig(root, configV2('template'));
+  initGit(root);
+  const synchronized = cli(root, 'sync-agents', '--write');
+  assert.equal(synchronized.status, 0, output(synchronized));
+  const result = cli(root, 'doctor', '--template', '--strict');
+  assert.equal(result.status, 0, output(result));
+  assert.match(result.stdout, /doctor: PASS/);
+});
+
+test('doctor project strict rejects empty full and ci checks', (t) => {
+  const root = withFixture(t);
+  writeConfig(root, configV2('project'));
+  initGit(root);
+  const result = cli(root, 'doctor', '--project', '--strict');
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /projectChecksRequired is true but no project commands/);
+  assert.match(output(result), /full/i);
+  assert.match(output(result), /ci/i);
+});
+
+test('init --project creates a clean project state and harness lock without inventing checks', (t) => {
+  const root = withFixture(t);
+  initGit(root);
+  writeConfig(root, configV2('template'));
+  replace(root, 'docs/team/STATUS.md', '- 需求：—', '- 需求：template-history');
+  replace(root, 'docs/team/STATUS.md', '- 总控状态：待命', '- 总控状态：完成');
+
+  const result = cli(root, 'init', '--project');
+  assert.equal(result.status, 0, output(result));
+  const config = JSON.parse(readFileSync(join(root, 'harness.config.json'), 'utf8'));
+  assert.equal(config.mode, 'project');
+  assert.deepEqual(config.checks.full, []);
+  assert.deepEqual(config.checks.ci, []);
+  assert.equal(existsSync(join(root, 'harness.lock.json')), true);
+  assert.deepEqual(readdirSync(join(root, 'docs', 'plans', 'active')), []);
+  assert.match(readFileSync(join(root, 'docs', 'team', 'STATUS.md'), 'utf8'), /需求：—/);
+  assert.match(readFileSync(join(root, 'docs', 'team', 'STATUS.md'), 'utf8'), /总控状态：待命/);
+});
+
+test('hooks and CI route staged secrets and fast/full/ci profiles to the intended gates', (t) => {
+  const root = withFixture(t);
+  const precommit = readFileSync(join(root, '.githooks', 'pre-commit'), 'utf8');
+  const prepush = readFileSync(join(root, '.githooks', 'pre-push'), 'utf8');
+  const workflow = readFileSync(join(root, '.github', 'workflows', 'harness.yml'), 'utf8');
+  assert.match(precommit, /guard-secrets --staged/);
+  assert.match(precommit, /verify --profile fast/);
+  assert.match(prepush, /verify --profile full/);
+  assert.match(workflow, /sync-agents --check/);
+  assert.match(workflow, /guard-secrets --tracked/);
+  assert.match(workflow, /verify --profile ci/);
+  assert.match(workflow, /node scripts\/harness\/run-tests\.mjs/);
+  assert.match(workflow, /fetch-depth:\s*0/);
+  assert.doesNotMatch(workflow, /npm (?:ci|test)/);
+});
+
+test('task create enforces one active task and supports status, approval and legal phase transitions', (t) => {
+  const root = withFixture(t);
+  let result = cli(root, 'task', 'create', 'feature-one', '--title', 'Feature one', '--version', 'V2');
+  assert.equal(result.status, 0, output(result));
+  assert.equal(existsSync(join(root, 'docs', 'plans', 'active', 'feature-one', 'plan.md')), true);
+  assert.equal(existsSync(join(root, 'docs', 'plans', 'active', 'feature-one', 'governance.json')), true);
+
+  result = cli(root, 'task', 'create', 'feature-two', '--title', 'Feature two');
+  assert.notEqual(result.status, 0);
+  assert.match(output(result), /active|feature-one|only one|唯一/i);
+
+  result = cli(root, 'task', 'status', 'feature-one');
+  assert.equal(result.status, 0, output(result));
+  assert.match(result.stdout, /feature-one/);
+  assert.match(result.stdout, /planning/);
+
+  result = cli(root, 'task', 'phase', 'feature-one', 'awaiting_approval');
+  assert.equal(result.status, 0, output(result));
+  result = cli(root, 'task', 'approve', 'feature-one', '--version', 'V2', '--by', 'user', '--evidence', '用户已确认：方案 V2');
+  assert.equal(result.status, 0, output(result));
+  const approved = JSON.parse(readFileSync(join(root, 'docs', 'plans', 'active', 'feature-one', 'governance.json'), 'utf8'));
+  assert.equal(approved.phase, 'approved');
+  assert.equal(approved.approvedVersion, 'V2');
+  assert.equal(approved.approval.approvedBy, 'user');
+  assert.match(approved.approval.evidence, /方案 V2/);
+
+  const illegal = cli(root, 'task', 'phase', 'feature-one', 'completed');
+  assert.notEqual(illegal.status, 0);
+  assert.match(output(illegal), /transition|phase|阶段/i);
+  result = cli(root, 'task', 'phase', 'feature-one', 'implementing');
+  assert.equal(result.status, 0, output(result));
+});
+
+test('task state mutation is parent-only while subagents may run read-only validation', (t) => {
+  const root = withFixture(t);
+  writeTask(root, 'parent-only');
+  const blocked = cliWithEnv(root, { HARNESS_AGENT_ROLE: 'qa_engineer' }, 'task', 'phase', 'parent-only', 'accepting');
+  assert.notEqual(blocked.status, 0);
+  assert.match(output(blocked), /parent-only|parent|父/i);
+
+  const hiddenStatus = cliWithEnv(root, { HARNESS_AGENT_ROLE: 'qa_engineer' }, 'task', 'status', 'parent-only');
+  assert.notEqual(hiddenStatus.status, 0);
+  assert.match(output(hiddenStatus), /parent-only|parent|父/i);
+
+  const validation = cliWithEnv(root, { HARNESS_AGENT_ROLE: 'qa_engineer' }, 'task', 'validate', 'parent-only', '--phase', 'implementation');
+  assert.equal(validation.status, 0, output(validation));
+});
+
+test('task implementation validation requires an active current approval and role path ownership', (t) => {
+  {
+    const root = withFixture(t);
+    initGit(root);
+    commitAll(root);
+    mkdirSync(join(root, 'apps', 'frontend'), { recursive: true });
+    writeFileSync(join(root, 'apps', 'frontend', 'feature.js'), 'export const feature = true;\n');
+    const result = cli(root, 'task', 'validate', '--phase', 'implementation');
+    assert.notEqual(result.status, 0);
+    assert.match(output(result), /active|task|任务/i);
+  }
+
+  {
+    const root = withFixture(t);
+    writeTask(root, 'stale-approval', { planVersion: 'V2', approvedVersion: 'V1' });
+    initGit(root);
+    commitAll(root);
+    writeFileSync(join(root, 'apps', 'frontend', 'stale.js'), 'export const stale = true;\n');
+    const result = cli(root, 'task', 'validate', '--phase', 'implementation');
+    assert.notEqual(result.status, 0);
+    assert.match(output(result), /approved|version|V2|确认/i);
+  }
+
+  {
+    const root = withFixture(t);
+    writeTask(root, 'allowed-path');
+    initGit(root);
+    commitAll(root);
+    writeFileSync(join(root, 'apps', 'frontend', 'allowed.js'), 'export const allowed = true;\n');
+    const result = cli(root, 'task', 'validate', '--phase', 'implementation');
+    assert.equal(result.status, 0, output(result));
+  }
+
+  {
+    const root = withFixture(t);
+    writeTask(root, 'forbidden-path');
+    initGit(root);
+    commitAll(root);
+    mkdirSync(join(root, 'apps', 'frontend', 'secret'), { recursive: true });
+    writeFileSync(join(root, 'apps', 'frontend', 'secret', 'leak.js'), 'export const leak = true;\n');
+    const result = cli(root, 'task', 'validate', '--phase', 'implementation');
+    assert.notEqual(result.status, 0);
+    assert.match(output(result), /forbidden|allowed|owner|ownership|路径/i);
+  }
+});
+
+test('task acceptance and completion require implementation roles, QA, checks and accepted risks', (t) => {
+  const incompleteRole = { role: 'backend_engineer', status: 'implementing', allowedPaths: ['apps/**'], forbiddenPaths: [], requiredSkill: 'backend-engineering' };
+  const completedQa = { role: 'qa_engineer', status: 'completed', allowedPaths: ['tests/**'], forbiddenPaths: [], requiredSkill: 'quality-engineering' };
+  const completedBackend = { ...incompleteRole, status: 'completed' };
+  const parent = { role: 'parent', status: 'completed', allowedPaths: ['docs/**'], forbiddenPaths: [], requiredSkill: 'team-orchestrator' };
+  const cases = [
+    ['unfinished implementation role', { phase: 'implementing', roles: [parent, incompleteRole, completedQa] }, ['task', 'phase', 'accepting'], /role|backend|complete|完成/i],
+    ['unfinished QA', { phase: 'accepting', roles: [parent, completedBackend, { ...completedQa, status: 'accepting' }] }, ['task', 'validate', '--phase', 'complete'], /QA|qa_engineer|complete|完成/i],
+    ['missing check evidence', { phase: 'accepting', roles: [parent, completedBackend, completedQa], acceptance: { results: [{ checkId: 'harness-tests', status: 'pass', evidence: '' }, { checkId: 'qa-acceptance', status: 'pass', evidence: 'QA: PASS' }] } }, ['task', 'validate', '--phase', 'complete'], /evidence|check|harness-tests|证据/i],
+    ['missing QA conclusion', { phase: 'accepting', roles: [parent, completedBackend, completedQa], acceptance: { results: [{ checkId: 'harness-tests', status: 'pass', evidence: 'PASS' }] } }, ['task', 'validate', '--phase', 'complete'], /qa-acceptance|QA|conclusion|结论/i],
+    ['unaccepted remaining risk', { phase: 'accepting', roles: [parent, completedBackend, completedQa], acceptance: { remainingRisks: ['manual platform gap'], acceptedByUser: null } }, ['task', 'validate', '--phase', 'complete'], /risk|acceptedByUser|风险/i],
+  ];
+  for (const [name, overrides, command, expected] of cases) {
+    const root = withFixture(t);
+    writeTask(root, name.toLowerCase().replaceAll(' ', '-'), overrides);
+    const result = cli(root, ...command);
+    assert.notEqual(result.status, 0, `${name}: ${output(result)}`);
+    assert.match(output(result), expected, name);
+  }
+});
+
+test('task complete archives evidence and resets STATUS to idle', (t) => {
+  const root = withFixture(t);
+  writeConfig(root, configV2('project'));
+  const taskId = 'ready-to-complete';
+  writeTask(root, taskId, { phase: 'accepting' });
+  replace(root, 'docs/team/STATUS.md', '- 需求：—', `- 需求：${taskId}`);
+  replace(root, 'docs/team/STATUS.md', '- 总控状态：待命', '- 总控状态：待验收');
+
+  const result = cli(root, 'task', 'complete', taskId);
+  assert.equal(result.status, 0, output(result));
+  assert.equal(existsSync(join(root, 'docs', 'plans', 'active', taskId)), false);
+  assert.equal(existsSync(join(root, 'docs', 'plans', 'completed', taskId, 'governance.json')), true);
+  const archived = JSON.parse(readFileSync(join(root, 'docs', 'plans', 'completed', taskId, 'governance.json'), 'utf8'));
+  assert.equal(archived.phase, 'completed');
+  assert.match(readFileSync(join(root, 'docs', 'team', 'STATUS.md'), 'utf8'), /总控状态：待命/);
+
+  const next = cli(root, 'task', 'create', 'next-task', '--title', 'Next task');
+  assert.equal(next.status, 0, output(next));
+});
+
+test('task complete separates template evolution history from project task archives', (t) => {
+  const root = withFixture(t);
+  const taskId = 'template-evolution';
+  writeTask(root, taskId, { phase: 'accepting' });
+  const result = cli(root, 'task', 'complete', taskId);
+  assert.equal(result.status, 0, output(result));
+  assert.equal(existsSync(join(root, 'docs', 'harness', 'history', taskId, 'governance.json')), true);
+  assert.equal(existsSync(join(root, 'docs', 'plans', 'completed', taskId)), false);
+});
+
+test('governed delivery remains verifiable after task archival locally and in CI', (t) => {
+  const root = withFixture(t);
+  writeConfig(root, configV2('project', { full: [check('project-full')] }));
+  initGit(root);
+  commitAll(root);
+  writeFileSync(join(root, 'apps', 'frontend', 'archived.js'), 'export const archived = true;\n');
+  writeTask(root, 'archived-delivery', { phase: 'accepting' });
+  const completed = cli(root, 'task', 'complete', 'archived-delivery');
+  assert.equal(completed.status, 0, output(completed));
+
+  let result = cli(root, 'verify', '--profile', 'full');
+  assert.equal(result.status, 0, output(result));
+  commitAll(root, 'completed governed delivery');
+  result = cliWithEnv(root, { CI: 'true' }, 'verify', '--profile', 'full');
+  assert.equal(result.status, 0, output(result));
+});
+
+test('guard-secrets blocks staged secrets but permits examples and explicit allowlist paths', (t) => {
+  {
+    const root = withFixture(t);
+    initGit(root);
+    mkdirSync(join(root, 'config'), { recursive: true });
+    writeFileSync(join(root, 'config', '.env.example'), 'API_KEY=replace-me\n');
+    assert.equal(gitCli(root, 'add', 'config/.env.example').status, 0);
+    const safe = cli(root, 'guard-secrets', '--staged');
+    assert.equal(safe.status, 0, output(safe));
+  }
+
+  for (const [name, path, contents] of [
+    ['environment file', '.env', 'API_KEY=replace-me\n'],
+    ['AWS access key', 'credentials.txt', 'AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP\n'],
+    ['private key', 'private.pem', '-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----\n'],
+  ]) {
+    const root = withFixture(t);
+    initGit(root);
+    writeFileSync(join(root, path), contents);
+    assert.equal(gitCli(root, 'add', '--force', path).status, 0);
+    const blocked = cli(root, 'guard-secrets', '--staged');
+    assert.notEqual(blocked.status, 0, name);
+    assert.match(output(blocked), /secret|credential|private key|\.env|密钥/i, name);
+  }
+
+  {
+    const root = withFixture(t);
+    initGit(root);
+    mkdirSync(join(root, 'fixtures'), { recursive: true });
+    writeFileSync(join(root, '.harness-secret-allowlist'), '# deterministic fixture\nfixtures/allowed-secret.txt\n');
+    writeFileSync(join(root, 'fixtures', 'allowed-secret.txt'), 'AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP\n');
+    assert.equal(gitCli(root, 'add', '.harness-secret-allowlist', 'fixtures/allowed-secret.txt').status, 0);
+    const allowed = cli(root, 'guard-secrets', '--staged');
+    assert.equal(allowed.status, 0, output(allowed));
+  }
+});
+
+test('guard-secrets scans tracked files independently of staged state', (t) => {
+  const root = withFixture(t);
+  initGit(root);
+  writeFileSync(join(root, 'tracked-credential.txt'), 'github_pat_11AAABBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB\n');
+  commitAll(root, 'commit tracked secret fixture');
+  const result = cli(root, 'guard-secrets', '--tracked');
+  assert.notEqual(result.status, 0);
+  assert.match(output(result), /tracked-credential|secret|token|密钥/i);
+});
+
+test('sync-agents detects drift and write restores generated Codex and Cursor roles', (t) => {
+  const root = withFixture(t);
+  let result = cli(root, 'sync-agents', '--write');
+  assert.equal(result.status, 0, output(result));
+  result = cli(root, 'sync-agents', '--check');
+  assert.equal(result.status, 0, output(result));
+
+  const generated = join(root, '.codex', 'agents', 'qa_engineer.toml');
+  writeFileSync(generated, `${readFileSync(generated, 'utf8')}\n# user drift\n`);
+  result = cli(root, 'sync-agents', '--check');
+  assert.notEqual(result.status, 0);
+  assert.match(output(result), /drift|qa_engineer|sync/i);
+
+  result = cli(root, 'sync-agents', '--write');
+  assert.equal(result.status, 0, output(result));
+  assert.doesNotMatch(readFileSync(generated, 'utf8'), /user drift/);
+  assert.equal(cli(root, 'sync-agents', '--check').status, 0);
 });
 
 test('install --dry-run does not create its target', (t) => {
@@ -264,6 +746,66 @@ test('install --merge preserves target content while inserting or replacing only
   assert.match(merged, /Target tail remains/);
   assert.doesNotMatch(merged, /OLD MANAGED CONTENT/);
   assert.match(merged, /当前父 Agent 是唯一总控和最终交付责任人/);
+});
+
+test('install writes manifest lock, harness CI/tests and a managed security gitignore block', (t) => {
+  const root = withFixture(t);
+  const target = join(root, 'install-contract-target');
+  mkdirSync(target);
+  writeFileSync(join(target, '.gitignore'), '# target-owned ignore\nlocal-cache/\n');
+
+  const result = cli(root, 'install', '--merge', target);
+  assert.equal(result.status, 0, output(result));
+  for (const path of [
+    'harness.manifest.json',
+    'harness.lock.json',
+    '.github/workflows/harness.yml',
+    'tests/harness/cli.test.mjs',
+    '.agents/team.config.json',
+  ]) assert.equal(existsSync(join(target, path)), true, path);
+
+  const manifest = JSON.parse(readFileSync(join(target, 'harness.manifest.json'), 'utf8'));
+  const lock = JSON.parse(readFileSync(join(target, 'harness.lock.json'), 'utf8'));
+  assert.equal(lock.schemaVersion, 1);
+  assert.equal(lock.harnessVersion, manifest.harnessVersion);
+  assert.equal(typeof lock.files['scripts/harness/cli.mjs'].hash, 'string');
+  assert.equal(lock.files['scripts/harness/cli.mjs'].strategy, 'replace-if-unmodified');
+  const gitignore = readFileSync(join(target, '.gitignore'), 'utf8');
+  assert.match(gitignore, /# target-owned ignore/);
+  assert.match(gitignore, /# harness-security:start/);
+  assert.match(gitignore, /# harness-security:end/);
+});
+
+test('upgrade dry-run is read-only, apply updates unmodified files, and conflicts never overwrite user changes', (t) => {
+  const root = withFixture(t);
+  const target = join(root, 'upgrade-target');
+  let result = cli(root, 'install', '--merge', target);
+  assert.equal(result.status, 0, output(result));
+  const source = join(root, '.githooks', 'pre-push');
+  const installed = join(target, '.githooks', 'pre-push');
+  const lockPath = join(target, 'harness.lock.json');
+
+  writeFileSync(source, `${readFileSync(source, 'utf8')}\n# harness source V2\n`);
+  const beforeDryRun = readFileSync(installed, 'utf8');
+  const lockBeforeDryRun = readFileSync(lockPath, 'utf8');
+  result = cli(root, 'upgrade', '--dry-run', target);
+  assert.equal(result.status, 0, output(result));
+  assert.match(result.stdout, /DRY update \.githooks\/pre-push/);
+  assert.equal(readFileSync(installed, 'utf8'), beforeDryRun);
+  assert.equal(readFileSync(lockPath, 'utf8'), lockBeforeDryRun);
+
+  result = cli(root, 'upgrade', '--apply', target);
+  assert.equal(result.status, 0, output(result));
+  assert.equal(readFileSync(installed, 'utf8'), readFileSync(source, 'utf8'));
+  assert.notEqual(readFileSync(lockPath, 'utf8'), lockBeforeDryRun);
+
+  writeFileSync(installed, `${readFileSync(installed, 'utf8')}\n# user-owned target edit\n`);
+  const userVersion = readFileSync(installed, 'utf8');
+  writeFileSync(source, `${readFileSync(source, 'utf8')}\n# harness source V3\n`);
+  result = cli(root, 'upgrade', '--apply', target);
+  assert.notEqual(result.status, 0);
+  assert.match(output(result), /conflict|not overwritten|pre-push/i);
+  assert.equal(readFileSync(installed, 'utf8'), userVersion);
 });
 
 test('install --override backs up an existing AGENTS.md', (t) => {

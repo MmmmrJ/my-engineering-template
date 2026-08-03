@@ -1,3 +1,4 @@
+# harness-security:start
 .DS_Store
 .env
 .env.*
@@ -5,7 +6,10 @@
 .trace/
 *.pem
 *.key
+*.p12
+*.pfx
 credentials.json
+# harness-security:end
 node_modules/
 dist/
 build/

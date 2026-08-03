@@ -18,8 +18,9 @@
 | [product/templates/feature-spec.md](product/templates/feature-spec.md) | 功能规格模板与最低字段 |
 | [design/](design/) | UI/UX 规格、本地原型图、冻结资产、实现截图和视觉验收报告；页面/交互变更必须使用 [design 模板](design/templates/design.md)、[资产清单模板](design/templates/assets/manifest.md) 与 [verification 模板](design/templates/verification.md) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | `apps/frontend`、`apps/backend`、`packages/contracts` 空目录与边界 |
-| [plans/active/](plans/active/) | 进行中的 durable exec-plan |
-| [plans/completed/](plans/completed/) | 已完成计划归档 |
+| [plans/active/](plans/active/) | 业务仓当前唯一 active task；每个任务包含 `plan.md` 与 `governance.json` |
+| [plans/completed/](plans/completed/) | 业务需求完成后的任务归档 |
+| [harness/history/](harness/history/) | 模板自身演进记录；安装到业务仓时不作为业务任务状态 |
 | [decisions/](decisions/) | 架构决策记录（ADR） |
 | [templates/exec-plan.md](templates/exec-plan.md) | 执行计划模板 |
 
@@ -34,4 +35,4 @@
 
 | 路径 | 用途 |
 |---|---|
-| [superpowers/plans/](superpowers/plans/) | 模版自身演进计划 |
+| [superpowers/plans/](superpowers/plans/) | 旧版模板演进输入；稳定记录归档到 `harness/history/` |
