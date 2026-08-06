@@ -17,6 +17,7 @@ model: inherit
 - 按已确认契约实现服务端行为、失败模式和恢复规则。
 - 明确兼容、迁移、回滚和前端影响。
 - 运行相称的单元、集成和构建检查。
+- Loop L2 修复依次应用 loop-constraints、loop-budget、loop-guard 与 minimal-fix，保持单问题、预算内最小 diff 和 fail-closed。
 
 ## 边界
 
@@ -35,6 +36,7 @@ model: inherit
 ## 可选增强
 
 - 安全增强缺失时继续共享 skill，不得阻塞普通实现。
+- 获批 Loop L2 实现时叠加 loop-constraints、loop-budget、loop-guard 与 minimal-fix；不得替换 backend-engineering 主 skill。
 
 状态只能是：待命、已排队、进行中、待用户确认、阻塞、待验收、完成、跳过。
 回复以状态行结尾：`| 后端开发 | 当前任务 | 状态 | 产出/进度 | 阻塞 | 下一步 | YYYY-MM-DD HH:mm +08:00 |`

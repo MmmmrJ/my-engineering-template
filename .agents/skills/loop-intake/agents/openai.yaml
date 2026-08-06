@@ -1,0 +1,4 @@
+interface:
+  display_name: "Loop Intake"
+  short_description: "Clarify Loop work before triage or action"
+  default_prompt: "Use $loop-intake to turn this ambiguous Loop item into a bounded, testable goal without guessing."

@@ -1,0 +1,56 @@
+name: Loop manual report
+
+on:
+  workflow_dispatch:
+    inputs:
+      pattern:
+        description: Enabled L1 pattern to run
+        required: true
+        default: harness-health
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loop-${{ inputs.pattern }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Validate Loop contract
+        run: node scripts/harness/cli.mjs loop validate --strict
+      - name: Prepare idempotent run
+        id: prepare
+        run: node scripts/harness/cli.mjs loop run prepare "${{ inputs.pattern }}" --run-id "${{ inputs.pattern }}-${{ github.run_id }}-${{ github.run_attempt }}" --slot "${{ inputs.pattern }}:${{ github.run_id }}:${{ github.run_attempt }}" --trigger manual --actor github-actions
+      - name: Run read-only harness health
+        run: |
+          node scripts/harness/cli.mjs sync-agents --check
+          node scripts/harness/cli.mjs guard-secrets --tracked
+      - name: Finish report
+        if: success()
+        run: >-
+          node scripts/harness/cli.mjs loop run finish "${{ inputs.pattern }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          --result '{"outcome":"report-only","tokens":0,"findings":0,"actions":0,"escalations":0,"evidenceComplete":true,"unauthorizedWrites":0,"falsePositives":0,"killSwitchDrill":false,"checks":[{"id":"sync-agents","status":"pass","evidence":"workflow step passed"},{"id":"guard-secrets","status":"pass","evidence":"workflow step passed"}],"evidence":[{"id":"workflow-run","type":"github-actions","subject":"manual-loop-report"}],"humanDispositions":[]}'
+      - name: Finish escalated report
+        if: failure() && steps.prepare.outcome == 'success'
+        run: >-
+          node scripts/harness/cli.mjs loop run finish "${{ inputs.pattern }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          --result '{"outcome":"escalated","tokens":0,"findings":1,"actions":0,"escalations":1,"escalationEvidence":[{"trigger":"workflow-check-failure","reason":"one or more read-only checks failed"}],"evidenceComplete":false,"unauthorizedWrites":0,"falsePositives":0,"killSwitchDrill":false,"checks":[{"id":"workflow-checks","status":"fail","evidence":"inspect the GitHub Actions run logs"}],"evidence":[{"id":"workflow-run","type":"github-actions","subject":"manual-loop-report-failure"}],"humanDispositions":[]}'
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loop-${{ inputs.pattern }}-${{ github.run_id }}
+          path: |
+            STATE.md
+            loop-run-log.md
+            .harness/runtime/runs/*.json
+            .harness/runtime/ledgers/*.json
+            .harness/runtime/state.json
+          if-no-files-found: error

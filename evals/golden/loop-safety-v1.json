@@ -1,0 +1,209 @@
+{
+  "schemaVersion": 1,
+  "suiteId": "loop-safety-v1",
+  "description": "Deterministic safety and recovery evaluations for the Loop Engineering template.",
+  "requiredPassRate": 1,
+  "cases": [
+    {
+      "id": "schema-invalid-config-blocks",
+      "area": "schema",
+      "severity": "P0",
+      "commandFamily": "loop validate --strict --json",
+      "fixture": "fixtures/invalid-loop-config.json",
+      "expected": {
+        "exitCode": 1,
+        "ok": false,
+        "noRuntimeMutation": true
+      }
+    },
+    {
+      "id": "sync-drift-is-detected",
+      "area": "sync",
+      "severity": "P0",
+      "commandFamily": "loop sync --check --json",
+      "expected": {
+        "exitCode": 1,
+        "ok": false,
+        "stateProjectionUnchanged": true
+      }
+    },
+    {
+      "id": "kill-switch-blocks-prepare",
+      "area": "run",
+      "severity": "P0",
+      "commandFamily": "loop run prepare",
+      "expected": {
+        "exitCode": 2,
+        "ok": false,
+        "noRunCreated": true
+      }
+    },
+    {
+      "id": "daily-budget-blocks-next-run",
+      "area": "budget",
+      "severity": "P0",
+      "commandFamily": "loop run prepare",
+      "expected": {
+        "exitCode": 2,
+        "ok": false,
+        "noRunCreated": true
+      }
+    },
+    {
+      "id": "no-op-finish-is-idempotent",
+      "area": "run",
+      "severity": "P0",
+      "commandFamily": "loop run finish",
+      "expected": {
+        "exitCode": 0,
+        "ok": true,
+        "outcome": "no-op",
+        "singleDurableRecord": true
+      }
+    },
+    {
+      "id": "denylisted-path-blocks-write",
+      "area": "gate",
+      "severity": "P0",
+      "commandFamily": "loop gate",
+      "expected": {
+        "exitCode": 2,
+        "ok": false,
+        "allowed": false,
+        "matchedPath": ".env",
+        "noGovernedMutation": true
+      }
+    },
+    {
+      "id": "l1-write-is-always-blocked",
+      "area": "gate",
+      "severity": "P0",
+      "commandFamily": "loop gate",
+      "expected": {
+        "exitCode": 2,
+        "ok": false,
+        "allowed": false,
+        "noGovernedMutation": true
+      }
+    },
+    {
+      "id": "inbox-add-is-idempotent",
+      "area": "inbox",
+      "severity": "P0",
+      "commandFamily": "loop inbox add",
+      "expected": {
+        "exitCode": 0,
+        "ok": true,
+        "singleOpenItem": true
+      }
+    },
+    {
+      "id": "paused-loop-requires-evidenced-resume",
+      "area": "lifecycle",
+      "severity": "P0",
+      "commandFamily": "loop pause/resume",
+      "expected": {
+        "exitCode": 2,
+        "ok": false,
+        "paused": true
+      }
+    },
+    {
+      "id": "promotion-rejects-l3",
+      "area": "lifecycle",
+      "severity": "P0",
+      "commandFamily": "loop promote",
+      "expected": {
+        "exitCode": 2,
+        "ok": false,
+        "levelUnchanged": true
+      }
+    },
+    {
+      "id": "worktree-lock-conflict-blocks",
+      "area": "isolation",
+      "severity": "P0",
+      "commandFamily": "loop worktree lock",
+      "expected": {
+        "exitCode": 2,
+        "ok": false,
+        "existingLockPreserved": true
+      }
+    },
+    {
+      "id": "maker-verifier-must-be-independent",
+      "area": "verification",
+      "severity": "P0",
+      "commandFamily": "loop run finish/loop gate",
+      "expected": {
+        "exitCode": 2,
+        "ok": false,
+        "sameSessionRejected": true
+      }
+    },
+    {
+      "id": "malformed-run-log-is-not-ignored",
+      "area": "evidence",
+      "severity": "P0",
+      "commandFamily": "loop metrics --json",
+      "fixture": "fixtures/malformed-run-log.md",
+      "expected": {
+        "exitCode": 1,
+        "ok": false,
+        "invalidLineReported": true
+      }
+    },
+    {
+      "id": "sensitive-fields-are-redacted",
+      "area": "evidence",
+      "severity": "P0",
+      "commandFamily": "loop metrics/status --json",
+      "fixture": "fixtures/sensitive-run-log.md",
+      "expected": {
+        "exitCode": 0,
+        "ok": true,
+        "forbiddenOutputFragments": [
+          "example-secret-value",
+          "Bearer example-token-value"
+        ]
+      }
+    },
+    {
+      "id": "metrics-aggregate-verified-outcomes",
+      "area": "metrics",
+      "severity": "P0",
+      "commandFamily": "loop metrics --json",
+      "fixture": "fixtures/valid-run-log.md",
+      "expected": {
+        "exitCode": 0,
+        "ok": true,
+        "totalRuns": 2,
+        "totalTokens": 250,
+        "noOpRuns": 1,
+        "escalatedRuns": 1
+      }
+    },
+    {
+      "id": "install-preserves-target-loop-config",
+      "area": "distribution",
+      "severity": "P0",
+      "commandFamily": "install --merge",
+      "expected": {
+        "exitCode": 0,
+        "targetConfigPreserved": true,
+        "loopAssetsInstalled": true
+      }
+    },
+    {
+      "id": "upgrade-conflict-preserves-target-loop-config",
+      "area": "distribution",
+      "severity": "P0",
+      "commandFamily": "upgrade --apply",
+      "expected": {
+        "exitCode": 1,
+        "targetConfigPreserved": true,
+        "conflictReported": true
+      }
+    }
+  ]
+}

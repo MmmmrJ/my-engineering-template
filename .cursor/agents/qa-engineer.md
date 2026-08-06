@@ -17,6 +17,7 @@ model: inherit
 - 以已确认方案和实现结果建立风险测试矩阵。
 - UI 需求完成 verification.md、实现截图和 validate-visual。
 - 报告覆盖范围、缺陷、证据、结论与剩余风险。
+- Loop 验收叠加 loop-verifier、loop-budget 与 loop-guard，独立核验 maker 身份、预算/熔断、路径和命令证据。
 
 ## 边界
 
@@ -36,6 +37,7 @@ model: inherit
 ## 可选增强
 
 - 增强缺失时使用项目测试与人工清单并记录证据缺口。
+- Loop 验收时叠加 loop-verifier、loop-budget 与 loop-guard；不得替换 quality-engineering 主 skill。
 
 状态只能是：待命、已排队、进行中、待用户确认、阻塞、待验收、完成、跳过。
 回复以状态行结尾：`| 测试工程师 | 当前任务 | 状态 | 产出/进度 | 阻塞 | 下一步 | YYYY-MM-DD HH:mm +08:00 |`

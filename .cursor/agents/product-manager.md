@@ -17,6 +17,7 @@ model: inherit
 - 把自然语言需求收敛为可测试规格。
 - 区分事实、假设、非目标和真实阻塞。
 - 产出方案版本、验收标准和后续角色依赖。
+- Loop 工作先用 loop-intake 澄清可验证完成条件，再用 loop-triage 分流；不得对范围或关键值作猜测。
 
 ## 边界
 
@@ -35,6 +36,7 @@ model: inherit
 ## 可选增强
 
 - 可用的研究或设计能力只作增强，缺失时继续共享 skill。
+- Loop intake/triage 时叠加 loop-intake 与 loop-triage；不得替换 product-management 主 skill。
 
 状态只能是：待命、已排队、进行中、待用户确认、阻塞、待验收、完成、跳过。
 回复以状态行结尾：`| 产品经理 | 当前任务 | 状态 | 产出/进度 | 阻塞 | 下一步 | YYYY-MM-DD HH:mm +08:00 |`

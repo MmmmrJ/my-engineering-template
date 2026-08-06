@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "suiteId": "built-in-patterns-v1",
+  "requiredPassRate": 1,
+  "requiredKinds": [
+    "success",
+    "no-op",
+    "ambiguous-inbox",
+    "budget-80-degrade",
+    "budget-100-stop",
+    "kill-switch",
+    "deny-or-max-files",
+    "lock-conflict",
+    "verifier-reject",
+    "interrupted-stale"
+  ],
+  "patterns": [
+    {
+      "id": "harness-health",
+      "level": "L1",
+      "enabled": true,
+      "cases": [
+        { "kind": "success", "expectedDecision": "report-only", "governedMutation": false },
+        { "kind": "no-op", "expectedDecision": "no-op", "subagentSpawns": 0 },
+        { "kind": "ambiguous-inbox", "expectedDecision": "escalated", "deduplicate": true },
+        { "kind": "budget-80-degrade", "expectedDecision": "report-only", "governedMutation": false },
+        { "kind": "budget-100-stop", "expectedDecision": "blocked", "exitCode": 2 },
+        { "kind": "kill-switch", "expectedDecision": "blocked", "exitCode": 2 },
+        { "kind": "deny-or-max-files", "expectedDecision": "blocked", "exitCode": 2 },
+        { "kind": "lock-conflict", "expectedDecision": "blocked", "exitCode": 2 },
+        { "kind": "verifier-reject", "expectedDecision": "no-proposal", "governedMutation": false },
+        { "kind": "interrupted-stale", "expectedDecision": "escalated", "newRunCreated": false }
+      ]
+    },
+    {
+      "id": "daily-triage",
+      "level": "L1",
+      "enabled": true,
+      "cases": [
+        { "kind": "success", "expectedDecision": "report-only", "governedMutation": false },
+        { "kind": "no-op", "expectedDecision": "no-op", "subagentSpawns": 0 },
+        { "kind": "ambiguous-inbox", "expectedDecision": "escalated", "deduplicate": true },
+        { "kind": "budget-80-degrade", "expectedDecision": "report-only", "governedMutation": false },
+        { "kind": "budget-100-stop", "expectedDecision": "blocked", "exitCode": 2 },
+        { "kind": "kill-switch", "expectedDecision": "blocked", "exitCode": 2 },
+        { "kind": "deny-or-max-files", "expectedDecision": "blocked", "exitCode": 2 },
+        { "kind": "lock-conflict", "expectedDecision": "blocked", "exitCode": 2 },
+        { "kind": "verifier-reject", "expectedDecision": "no-proposal", "governedMutation": false },
+        { "kind": "interrupted-stale", "expectedDecision": "escalated", "newRunCreated": false }
+      ]
+    },
+    {
+      "id": "ci-sweeper",
+      "level": "L2",
+      "enabled": false,
+      "cases": [
+        { "kind": "success", "expectedDecision": "proposal", "push": false, "merge": false },
+        { "kind": "no-op", "expectedDecision": "no-op", "subagentSpawns": 0 },
+        { "kind": "ambiguous-inbox", "expectedDecision": "escalated", "deduplicate": true },
+        { "kind": "budget-80-degrade", "expectedDecision": "report-only", "effectiveLevel": "L1" },
+        { "kind": "budget-100-stop", "expectedDecision": "blocked", "exitCode": 2 },
+        { "kind": "kill-switch", "expectedDecision": "blocked", "exitCode": 2 },
+        { "kind": "deny-or-max-files", "expectedDecision": "blocked", "exitCode": 2 },
+        { "kind": "lock-conflict", "expectedDecision": "blocked", "exitCode": 2 },
+        { "kind": "verifier-reject", "expectedDecision": "rejected", "proposalReady": false },
+        { "kind": "interrupted-stale", "expectedDecision": "escalated", "newRunCreated": false }
+      ]
+    }
+  ]
+}

@@ -8,6 +8,14 @@ import { fileURLToPath } from 'node:url';
 
 const REPOSITORY = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+const LOOP_SKILL_ROLE_MATRIX = {
+  product_manager: ['loop-intake', 'loop-triage'],
+  backend_engineer: ['loop-constraints', 'loop-budget', 'loop-guard', 'minimal-fix'],
+  qa_engineer: ['loop-verifier', 'loop-budget', 'loop-guard'],
+};
+
+const LOOP_SKILLS = [...new Set(Object.values(LOOP_SKILL_ROLE_MATRIX).flat())];
+
 function fixture() {
   const sandbox = mkdtempSync(join(tmpdir(), 'harness-test-'));
   const root = join(sandbox, 'harness');
@@ -713,6 +721,41 @@ test('sync-agents detects drift and write restores generated Codex and Cursor ro
   assert.equal(result.status, 0, output(result));
   assert.doesNotMatch(readFileSync(generated, 'utf8'), /user drift/);
   assert.equal(cli(root, 'sync-agents', '--check').status, 0);
+});
+
+test('all Loop skill overlays are manifested, role-generated, installed, and synchronized', (t) => {
+  const root = withFixture(t);
+  const manifest = JSON.parse(readFileSync(join(root, 'harness.manifest.json'), 'utf8'));
+  const manifested = new Set(manifest.files.map(({ path }) => path));
+
+  for (const skill of LOOP_SKILLS) {
+    const relative = `.agents/skills/${skill}/SKILL.md`;
+    assert.equal(existsSync(join(root, relative)), true, `missing Loop skill: ${relative}`);
+    assert.equal(manifested.has(relative), true, `Loop skill absent from manifest: ${relative}`);
+  }
+
+  let result = cli(root, 'sync-agents', '--write');
+  assert.equal(result.status, 0, output(result));
+  result = cli(root, 'sync-agents', '--check');
+  assert.equal(result.status, 0, output(result));
+
+  for (const [role, skills] of Object.entries(LOOP_SKILL_ROLE_MATRIX)) {
+    const codex = readFileSync(join(root, '.codex', 'agents', `${role}.toml`), 'utf8');
+    const cursor = readFileSync(join(root, '.cursor', 'agents', `${role.replaceAll('_', '-')}.md`), 'utf8');
+    for (const skill of skills) {
+      assert.match(codex, new RegExp(skill, 'u'), `${role} Codex output missing ${skill}`);
+      assert.match(cursor, new RegExp(skill, 'u'), `${role} Cursor output missing ${skill}`);
+    }
+  }
+
+  const target = join(root, 'loop-overlay-install-target');
+  result = cli(root, 'install', '--merge', target);
+  assert.equal(result.status, 0, output(result));
+  for (const skill of LOOP_SKILLS) {
+    assert.equal(existsSync(join(target, '.agents', 'skills', skill, 'SKILL.md')), true, `installed target missing ${skill}`);
+  }
+  result = cli(target, 'sync-agents', '--check');
+  assert.equal(result.status, 0, output(result));
 });
 
 test('install --dry-run does not create its target', (t) => {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Minimal Fix"
+  short_description: "Create one bounded and verifiable patch"
+  default_prompt: "Use $minimal-fix to produce the smallest isolated patch for this explicit issue and hand it to an independent verifier."

@@ -27,4 +27,6 @@ jobs:
       - run: node scripts/harness/cli.mjs sync-agents --check
       - run: node scripts/harness/cli.mjs guard-secrets --tracked
       - run: node scripts/harness/cli.mjs doctor --strict
+      - run: node scripts/harness/cli.mjs loop sync --check
+      - run: node scripts/harness/cli.mjs loop doctor --strict
       - run: node scripts/harness/cli.mjs verify --profile ci

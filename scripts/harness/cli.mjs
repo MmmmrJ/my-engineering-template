@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { commandLoop } from './lib/loop/runtime.mjs';
 
 const CLI_FILE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(CLI_FILE), '..', '..');
@@ -580,6 +581,7 @@ function validTaskId(id) {
 
 function validateTaskShape(task, expectedId = '') {
   if (!task || typeof task !== 'object' || Array.isArray(task)) fail('governance.json must be an object.');
+  if (![1, 2].includes(task.schemaVersion)) fail('governance schemaVersion must be 1 or 2.');
   if (!validTaskId(task.taskId)) fail('governance taskId must be a safe lowercase identifier.');
   if (expectedId && task.taskId !== expectedId) fail(`governance taskId ${task.taskId} does not match directory ${expectedId}.`);
   if (!TASK_PHASES.includes(task.phase)) fail(`invalid task phase: ${task.phase}.`);
@@ -591,6 +593,12 @@ function validateTaskShape(task, expectedId = '') {
   }
   if (!Array.isArray(task.requiredChecks)) fail('governance requiredChecks must be an array.');
   if (!task.acceptance || !Array.isArray(task.acceptance.results) || !Array.isArray(task.acceptance.remainingRisks)) fail('governance acceptance requires results and remainingRisks arrays.');
+  if (task.schemaVersion === 2) {
+    if (!task.source || !['human', 'loop'].includes(task.source.kind)) fail('governance V2 source.kind must be human or loop.');
+    if (task.source.kind === 'loop' && (typeof task.source.loopId !== 'string' || typeof task.source.runId !== 'string')) fail('loop-sourced governance V2 requires source.loopId and source.runId.');
+    if (!task.policy || typeof task.policy !== 'object') fail('governance V2 policy is required.');
+    if (!task.isolation || typeof task.isolation !== 'object') fail('governance V2 isolation is required.');
+  }
 }
 
 function uniqueTask(id = '') {
@@ -658,7 +666,13 @@ function commandTask(args) {
     const version = optionValue(rest, '--version', 'V1');
     const directory = join(ROOT, 'docs', 'plans', 'active', id);
     mkdirSync(directory, { recursive: true });
-    const task = { schemaVersion: 1, taskId: id, title, phase: 'planning', planVersion: version, approvedVersion: null, approval: { status: 'pending', approvedBy: null, approvedAt: null, evidence: '' }, roles: [], capabilities: [], requiredChecks: ['qa-acceptance'], acceptance: { results: [], remainingRisks: [], acceptedByUser: null } };
+    const sourceKind = optionValue(rest, '--source', 'human');
+    if (!['human', 'loop'].includes(sourceKind)) fail('task create --source must be human or loop.');
+    const source = sourceKind === 'loop'
+      ? { kind: 'loop', loopId: optionValue(rest, '--loop-id'), runId: optionValue(rest, '--run-id'), findingId: optionValue(rest, '--finding-id', '') || null }
+      : { kind: 'human', loopId: null, runId: null, findingId: null };
+    if (sourceKind === 'loop' && (!source.loopId || !source.runId)) fail('loop-sourced task create requires --loop-id and --run-id.');
+    const task = { schemaVersion: 2, taskId: id, title, phase: 'planning', planVersion: version, approvedVersion: null, source, approval: { status: 'pending', approvedBy: null, approvedAt: null, evidence: '' }, roles: [], capabilities: [], requiredChecks: ['qa-acceptance'], policy: { decision: 'pending', evidence: [] }, isolation: { mode: 'none', worktree: null, lockOwner: null }, acceptance: { results: [], remainingRisks: [], acceptedByUser: null } };
     writeFileSync(join(directory, 'plan.md'), `# Exec Plan: ${title}\n\n- 状态：\`planning\`\n- 方案版本：\`${version}\`\n`);
     writeTask(directory, task);
     console.log(`task create: ${id}`);
@@ -1295,7 +1309,7 @@ function commandValidateVisual(args) {
 }
 
 function usage() {
-  console.log(`Usage: node scripts/harness/cli.mjs <command> [options]\n\nCommands:\n  init [--project]\n  config migrate [--dry-run|--apply]\n  migrate-config [--dry-run|--apply]\n  doctor [--template|--project] [--strict]\n  verify [--profile fast|full|ci]\n  task <create|status|approve|phase|validate|complete> ...\n  guard [command ...]\n  guard-secrets <--staged|--tracked>\n  sync-agents <--check|--write>\n  session\n  install [--merge|--override] [--dry-run] <target>\n  upgrade [--dry-run|--apply] <target>\n  validate-spec <file>\n  validate-design <directory|file>\n  validate-visual <directory|file>`);
+  console.log(`Usage: node scripts/harness/cli.mjs <command> [options]\n\nCommands:\n  init [--project]\n  config migrate [--dry-run|--apply]\n  migrate-config [--dry-run|--apply]\n  doctor [--template|--project] [--strict]\n  verify [--profile fast|full|ci]\n  task <create|status|approve|phase|validate|complete> ...\n  loop <init|validate|doctor|status|sync|run|inbox|gate|pause|resume|promote|worktree|metrics> ...\n  guard [command ...]\n  guard-secrets <--staged|--tracked>\n  sync-agents <--check|--write>\n  session\n  install [--merge|--override] [--dry-run] <target>\n  upgrade [--dry-run|--apply] <target>\n  validate-spec <file>\n  validate-design <directory|file>\n  validate-visual <directory|file>`);
 }
 
 ensureNode();
@@ -1307,6 +1321,7 @@ switch (command) {
   case 'doctor': commandDoctor(args); break;
   case 'verify': commandVerify(args); break;
   case 'task': commandTask(args); break;
+  case 'loop': commandLoop(ROOT, args); break;
   case 'guard': commandGuard(args); break;
   case 'guard-secrets': commandGuardSecrets(args); break;
   case 'sync-agents': commandSyncAgents(args); break;

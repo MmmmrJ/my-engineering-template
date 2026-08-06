@@ -1,0 +1,20 @@
+# loop-config-sha256:211c88f2d4ad0437e1f2b6e91654a060a4dd1d3f901802ca11011d43935cae62
+version: 1
+denylist:
+  - ".env"
+  - ".env.*"
+  - "**/secrets/**"
+  - "**/credentials/**"
+  - "apps/**"
+  - "packages/**"
+  - "**/migrations/**"
+  - "auth/**"
+  - "payments/**"
+  - "billing/**"
+maxFiles: 10
+actions:
+  report: allow
+  proposal: allow
+  write: approved-task
+  push: human
+  merge: never

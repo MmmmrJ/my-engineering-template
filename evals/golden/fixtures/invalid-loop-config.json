@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 999,
+  "patterns": [
+    {
+      "id": "unsafe pattern id",
+      "enabled": true,
+      "level": "L3",
+      "mode": "write"
+    }
+  ]
+}

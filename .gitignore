@@ -9,6 +9,8 @@
 *.p12
 *.pfx
 credentials.json
+.harness/runtime/
+.loop-worktrees/
 # harness-security:end
 node_modules/
 dist/

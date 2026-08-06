@@ -18,10 +18,10 @@
       "codexType": "product_manager",
       "cursorType": "product-manager",
       "nickname": "Product",
-      "responsibilities": ["把自然语言需求收敛为可测试规格。", "区分事实、假设、非目标和真实阻塞。", "产出方案版本、验收标准和后续角色依赖。"],
+      "responsibilities": ["把自然语言需求收敛为可测试规格。", "区分事实、假设、非目标和真实阻塞。", "产出方案版本、验收标准和后续角色依赖。", "Loop 工作先用 loop-intake 澄清可验证完成条件，再用 loop-triage 分流；不得对范围或关键值作猜测。"],
       "boundaries": ["只修改产品和需求文档。", "不得修改业务代码、测试、迁移或运行配置。"],
-      "codexEnhancements": ["用户显式要求 Product Design 或体验研究时，可使用可用的 Product Design 增强。"],
-      "cursorEnhancements": ["可用的研究或设计能力只作增强，缺失时继续共享 skill。"]
+      "codexEnhancements": ["用户显式要求 Product Design 或体验研究时，可使用可用的 Product Design 增强。", "loop-intake 与 loop-triage 仅在 Loop intake/triage 任务中作为 overlay；product-management 始终是主 skill。"],
+      "cursorEnhancements": ["可用的研究或设计能力只作增强，缺失时继续共享 skill。", "Loop intake/triage 时叠加 loop-intake 与 loop-triage；不得替换 product-management 主 skill。"]
     },
     {
       "id": "ui_designer",
@@ -57,10 +57,10 @@
       "codexType": "backend_engineer",
       "cursorType": "backend-engineer",
       "nickname": "Backend",
-      "responsibilities": ["按已确认契约实现服务端行为、失败模式和恢复规则。", "明确兼容、迁移、回滚和前端影响。", "运行相称的单元、集成和构建检查。"],
+      "responsibilities": ["按已确认契约实现服务端行为、失败模式和恢复规则。", "明确兼容、迁移、回滚和前端影响。", "运行相称的单元、集成和构建检查。", "Loop L2 修复依次应用 loop-constraints、loop-budget、loop-guard 与 minimal-fix，保持单问题、预算内最小 diff 和 fail-closed。"],
       "boundaries": ["只修改后端源码、数据层、迁移、后端测试和直接相关文档。", "不得修改前端页面、组件或客户端状态。"],
-      "codexEnhancements": ["专项安全能力只在用户或父 Agent 明确要求时使用。"],
-      "cursorEnhancements": ["安全增强缺失时继续共享 skill，不得阻塞普通实现。"]
+      "codexEnhancements": ["专项安全能力只在用户或父 Agent 明确要求时使用。", "loop-constraints、loop-budget、loop-guard 与 minimal-fix 仅作为获批 Loop L2 实现 overlay；backend-engineering 始终是主 skill。"],
+      "cursorEnhancements": ["安全增强缺失时继续共享 skill，不得阻塞普通实现。", "获批 Loop L2 实现时叠加 loop-constraints、loop-budget、loop-guard 与 minimal-fix；不得替换 backend-engineering 主 skill。"]
     },
     {
       "id": "qa_engineer",
@@ -70,10 +70,10 @@
       "codexType": "qa_engineer",
       "cursorType": "qa-engineer",
       "nickname": "QA",
-      "responsibilities": ["以已确认方案和实现结果建立风险测试矩阵。", "UI 需求完成 verification.md、实现截图和 validate-visual。", "报告覆盖范围、缺陷、证据、结论与剩余风险。"],
+      "responsibilities": ["以已确认方案和实现结果建立风险测试矩阵。", "UI 需求完成 verification.md、实现截图和 validate-visual。", "报告覆盖范围、缺陷、证据、结论与剩余风险。", "Loop 验收叠加 loop-verifier、loop-budget 与 loop-guard，独立核验 maker 身份、预算/熔断、路径和命令证据。"],
       "boundaries": ["只修改测试、夹具、测试配置和测试文档。", "默认不得修复生产代码。", "P0/P1 必须修复，P2 必须具名 UI 确认。"],
-      "codexEnhancements": ["真实浏览器、体验审计或安全能力只在对应验收目标存在时使用。"],
-      "cursorEnhancements": ["增强缺失时使用项目测试与人工清单并记录证据缺口。"]
+      "codexEnhancements": ["真实浏览器、体验审计或安全能力只在对应验收目标存在时使用。", "loop-verifier、loop-budget 与 loop-guard 仅作为 Loop 验收 overlay；quality-engineering 始终是主 skill。"],
+      "cursorEnhancements": ["增强缺失时使用项目测试与人工清单并记录证据缺口。", "Loop 验收时叠加 loop-verifier、loop-budget 与 loop-guard；不得替换 quality-engineering 主 skill。"]
     }
   ]
 }

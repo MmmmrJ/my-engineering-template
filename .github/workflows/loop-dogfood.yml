@@ -1,0 +1,101 @@
+name: Loop harness-health dogfood
+
+on:
+  schedule:
+    - cron: "17 8 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loop-harness-health-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  harness-health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Prepare
+        id: prepare
+        run: node scripts/harness/cli.mjs loop run prepare harness-health --run-id "harness-health-${{ github.run_id }}-${{ github.run_attempt }}" --slot "harness-health:${{ github.run_id }}:${{ github.run_attempt }}" --trigger schedule --actor github-actions
+      - name: Read-only checks
+        run: |
+          node scripts/harness/cli.mjs doctor --template --strict
+          node scripts/harness/cli.mjs sync-agents --check
+          node scripts/harness/cli.mjs guard-secrets --tracked
+          node scripts/harness/cli.mjs loop validate --strict
+      - name: Finish
+        if: success()
+        run: >-
+          node scripts/harness/cli.mjs loop run finish "harness-health-${{ github.run_id }}-${{ github.run_attempt }}"
+          --result '{"outcome":"report-only","tokens":0,"findings":0,"actions":0,"escalations":0,"evidenceComplete":true,"unauthorizedWrites":0,"falsePositives":0,"killSwitchDrill":false,"checks":[{"id":"doctor-template-strict","status":"pass","evidence":"workflow step passed"},{"id":"sync-agents","status":"pass","evidence":"workflow step passed"},{"id":"guard-secrets","status":"pass","evidence":"workflow step passed"},{"id":"loop-validate","status":"pass","evidence":"workflow step passed"}],"evidence":[{"id":"workflow-run","type":"github-actions","subject":"harness-health-dogfood"}],"humanDispositions":[]}'
+      - name: Finish escalated report
+        if: failure() && steps.prepare.outcome == 'success'
+        run: >-
+          node scripts/harness/cli.mjs loop run finish "harness-health-${{ github.run_id }}-${{ github.run_attempt }}"
+          --result '{"outcome":"escalated","tokens":0,"findings":1,"actions":0,"escalations":1,"escalationEvidence":[{"trigger":"workflow-check-failure","reason":"one or more read-only checks failed"}],"evidenceComplete":false,"unauthorizedWrites":0,"falsePositives":0,"killSwitchDrill":false,"checks":[{"id":"workflow-checks","status":"fail","evidence":"inspect the GitHub Actions run logs"}],"evidence":[{"id":"workflow-run","type":"github-actions","subject":"harness-health-dogfood-failure"}],"humanDispositions":[]}'
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: loop-harness-health-${{ github.run_id }}
+          path: |
+            STATE.md
+            loop-run-log.md
+            .harness/runtime/runs/*.json
+            .harness/runtime/ledgers/*.json
+            .harness/runtime/state.json
+          if-no-files-found: error
+
+  propose-state:
+    needs: harness-health
+    if: always() && needs.harness-health.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Download Loop evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: loop-harness-health-${{ github.run_id }}
+          path: loop-evidence
+      - name: Prepare state proposal
+        id: changes
+        shell: bash
+        run: |
+          cp loop-evidence/STATE.md STATE.md
+          cp loop-evidence/loop-run-log.md loop-run-log.md
+          if git diff --quiet -- STATE.md loop-run-log.md; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No Loop state changes to propose."
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - name: Create state pull request
+        if: steps.changes.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="codex/loop-state/harness-health-${{ github.run_id }}-${{ github.run_attempt }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -- STATE.md loop-run-log.md
+          git commit -m "chore(loop): propose harness-health state update"
+          git push --set-upstream origin "$branch"
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "chore(loop): propose harness-health state update" \
+            --body "Proposes the Loop state and run-log updates produced by GitHub Actions run ${{ github.run_id }} (attempt ${{ github.run_attempt }}). This pull request requires normal review and is never auto-merged."

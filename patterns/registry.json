@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "patterns": [
+    {
+      "id": "harness-health",
+      "level": "L1",
+      "mode": "report-only",
+      "file": "harness-health.md"
+    },
+    {
+      "id": "daily-triage",
+      "level": "L1",
+      "mode": "report-only",
+      "file": "daily-triage.md"
+    },
+    {
+      "id": "ci-sweeper",
+      "level": "L2",
+      "mode": "assisted",
+      "file": "ci-sweeper.md"
+    }
+  ],
+  "configHash": "211c88f2d4ad0437e1f2b6e91654a060a4dd1d3f901802ca11011d43935cae62"
+}
