@@ -2,28 +2,41 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  realpathSync,
   readdirSync,
+  renameSync as atomicRenameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { resolveCheck, runDeclaredChecks } from './adapters.mjs';
+import { executePatternRunner } from './runner.mjs';
 
 const LEVELS = new Set(['L1', 'L2']);
 const MODES = new Set(['report-only', 'assisted']);
 const ACTIONS = new Set(['report', 'proposal', 'write', 'push', 'merge']);
+const GATE_ACTIONS = new Set([...ACTIONS, 'maker', 'scope']);
 const OUTCOMES = new Set(['no-op', 'report-only', 'proposal', 'success', 'failed', 'escalated']);
 const TRIGGERS = new Set(['manual', 'schedule', 'event']);
-const WORKTREE_STATUSES = new Set(['active', 'rejected', 'escalated', 'merged', 'stale']);
+const WORKTREE_STATUSES = new Set(['active', 'proposed', 'rejected', 'escalated', 'merged', 'stale']);
 const STATE_START = '<!-- loop-state-json:start -->';
 const STATE_END = '<!-- loop-state-json:end -->';
 const CONFIG_HASH_PREFIX = '<!-- loop-config-sha256:';
 const PROJECTION_START = '<!-- loop-config-projection:start -->';
 const PROJECTION_END = '<!-- loop-config-projection:end -->';
 const SAFE_ID = /^[a-z0-9](?:[a-z0-9._-]{0,78}[a-z0-9])?$/;
+const PATTERN_INPUT_ADAPTERS = {
+  'harness-health': ['harness-checks'],
+  'daily-triage': ['git-status', 'ci-signal'],
+  'ci-sweeper': ['ci-failure', 'git-diff'],
+};
 
 function fail(message, code = 1) {
   console.error(`loop: ${message}`);
@@ -48,6 +61,13 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function writeJsonAtomic(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`);
+  atomicRenameSync(temporary, path);
+}
+
 function hash(value) {
   return createHash('sha256').update(value).digest('hex');
 }
@@ -69,6 +89,76 @@ function configDigest(config) {
   return hash(JSON.stringify(config));
 }
 
+function registryEntry(pattern, previous = {}) {
+  const template = previous.template ?? (PATTERN_INPUT_ADAPTERS[pattern.id] ? pattern.id : null);
+  const inputAdapters = PATTERN_INPUT_ADAPTERS[template] ?? ['manual-input'];
+  const skills = [
+    pattern.roles.triageSkill,
+    ...(pattern.level === 'L2' ? ['minimal-fix', 'loop-verifier'] : []),
+  ];
+  return {
+    id: pattern.id,
+    template,
+    level: pattern.level,
+    mode: pattern.mode,
+    file: PATTERN_INPUT_ADAPTERS[pattern.id] ? `${pattern.id}.md` : null,
+    owner: {
+      role: pattern.roles.makerRole ?? 'parent',
+      verifierRole: pattern.roles.verifierRole,
+    },
+    cadence: {
+      trigger: pattern.trigger.type,
+      fireImmediately: pattern.trigger.fireImmediately,
+      offHours: pattern.trigger.offHours,
+    },
+    inputAdapters,
+    skills: [...new Set(skills)],
+    checks: pattern.checks,
+    cost: {
+      maxRunsPerDay: pattern.budget.maxRunsPerDay,
+      maxTokensPerRun: pattern.budget.maxTokensPerRun,
+      maxTokensPerDay: pattern.budget.maxTokensPerDay,
+      maxActionsPerDay: pattern.budget.maxActionsPerDay,
+    },
+    humanGates: {
+      taskApproval: pattern.level === 'L2' && pattern.gates.write === 'approved-task',
+      independentVerifier: pattern.roles.independentVerifier,
+      push: pattern.gates.push,
+      merge: pattern.gates.merge,
+    },
+  };
+}
+
+function expectedRegistry(config, current = {}) {
+  const currentPatterns = Array.isArray(current.patterns) ? current.patterns : [];
+  return {
+    schemaVersion: 2,
+    patterns: config.patterns.map((pattern) => registryEntry(
+      pattern,
+      currentPatterns.find((entry) => entry?.id === pattern.id),
+    )),
+    configHash: configDigest(config),
+  };
+}
+
+function registryErrors(config, registry) {
+  if (!registry || typeof registry !== 'object' || Array.isArray(registry)) return ['patterns/registry.json must be an object'];
+  const expected = expectedRegistry(config, registry);
+  const errors = [];
+  if (registry.schemaVersion !== 2) errors.push('patterns/registry.json schemaVersion must be 2');
+  const actualPatterns = Array.isArray(registry.patterns) ? registry.patterns : [];
+  const actualIds = actualPatterns.map((entry) => entry?.id);
+  const expectedIds = expected.patterns.map((entry) => entry.id);
+  if (JSON.stringify([...actualIds].sort()) !== JSON.stringify([...expectedIds].sort())) errors.push('patterns/registry.json pattern set drift');
+  for (const expectedEntry of expected.patterns) {
+    const actual = actualPatterns.find((entry) => entry?.id === expectedEntry.id);
+    if (!actual) continue;
+    if (JSON.stringify(actual) !== JSON.stringify(expectedEntry)) errors.push(`patterns/registry.json metadata drift: ${expectedEntry.id}`);
+  }
+  if (registry.configHash !== expected.configHash) errors.push('patterns/registry.json config hash drift');
+  return errors;
+}
+
 function unknownKeys(value, allowed, label, errors) {
   for (const key of Object.keys(value ?? {})) if (!allowed.has(key)) errors.push(`${label} has unknown field ${key}`);
 }
@@ -77,6 +167,58 @@ function safeRelative(value) {
   if (typeof value !== 'string' || !value.trim()) return false;
   const path = normalized(value.trim());
   return !path.startsWith('/') && !/^[a-z]:\//i.test(path) && !path.split('/').includes('..') && !path.includes('\0');
+}
+
+function futureRealPath(path) {
+  let cursor = resolve(path);
+  const missing = [];
+  while (!existsSync(cursor)) {
+    const parent = dirname(cursor);
+    if (parent === cursor) fail(`cannot resolve evidence path boundary: ${path}.`);
+    missing.unshift(basename(cursor));
+    cursor = parent;
+  }
+  return resolve(realpathSync.native(cursor), ...missing);
+}
+
+function withinPath(root, candidate) {
+  const value = relative(root, candidate);
+  return value === '' || (!isAbsolute(value) && value !== '..' && !value.startsWith(`..${sep}`));
+}
+
+function validateEvidenceComponents(root, target) {
+  const lexicalRoot = resolve(root);
+  const physicalRoot = futureRealPath(lexicalRoot);
+  const parts = relative(lexicalRoot, target).split(sep).filter(Boolean);
+  let cursor = lexicalRoot;
+  for (const part of parts) {
+    cursor = join(cursor, part);
+    let stats;
+    try { stats = lstatSync(cursor); }
+    catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
+    if (!stats.isSymbolicLink()) continue;
+    let resolvedLink;
+    try { resolvedLink = realpathSync.native(cursor); }
+    catch { fail(`Loop evidence path contains a dangling symlink or junction: ${normalized(relative(lexicalRoot, cursor))}.`); }
+    if (!withinPath(physicalRoot, resolvedLink)) {
+      fail(`Loop evidence path crosses a symlink or junction outside repository: ${normalized(relative(lexicalRoot, cursor))}.`);
+    }
+  }
+}
+
+export function safeEvidencePath(root, value) {
+  if (!safeRelative(value)) fail(`unsafe Loop evidence path: ${JSON.stringify(value)}.`);
+  const lexicalRoot = resolve(root);
+  const lexicalTarget = resolve(root, value);
+  if (!withinPath(lexicalRoot, lexicalTarget)) fail(`Loop evidence path escapes repository: ${value}.`);
+  validateEvidenceComponents(lexicalRoot, lexicalTarget);
+  const physicalRoot = futureRealPath(lexicalRoot);
+  const physicalTarget = futureRealPath(lexicalTarget);
+  if (!withinPath(physicalRoot, physicalTarget)) fail(`Loop evidence path crosses a symlink or junction outside repository: ${value}.`);
+  return lexicalTarget;
 }
 
 function option(args, name, fallback = '') {
@@ -116,8 +258,14 @@ function run(program, args, cwd, stdio = 'pipe') {
 }
 
 function configPath(root) { return join(root, 'loop.config.json'); }
-function statePath(root) { return join(root, 'STATE.md'); }
-function runLogPath(root) { return join(root, 'loop-run-log.md'); }
+function configuredPaths(root, config, field, fallback) {
+  const values = [...new Set((config?.patterns ?? []).map((pattern) => pattern.state?.[field]).filter(Boolean))];
+  return (values.length ? values : [fallback]).map((value) => safeEvidencePath(root, value));
+}
+function statePaths(root, config) { return configuredPaths(root, config, 'summaryFile', 'STATE.md'); }
+function statePath(root, config) { return statePaths(root, config)[0]; }
+function runLogPaths(root, config) { return configuredPaths(root, config, 'runLogFile', 'loop-run-log.md'); }
+function runLogPath(root, config, pattern = null) { return safeEvidencePath(root, pattern?.state?.runLogFile ?? config?.patterns?.[0]?.state?.runLogFile ?? 'loop-run-log.md'); }
 function runtimeRoot(root) { return join(root, '.harness', 'runtime'); }
 function runDirectory(root) { return join(runtimeRoot(root), 'runs'); }
 function ledgerDirectory(root) { return join(runtimeRoot(root), 'ledgers'); }
@@ -125,6 +273,119 @@ function internalStatePath(root) { return join(runtimeRoot(root), 'state.json');
 function worktreeRoot(root) { return join(runtimeRoot(root), 'worktrees'); }
 function lockDirectory(root) { return join(worktreeRoot(root), 'locks'); }
 function worktreeManifestPath(root) { return join(worktreeRoot(root), 'manifest.json'); }
+function gateDirectory(root) { return join(runtimeRoot(root), 'gates'); }
+function verificationDirectory(root) { return join(runtimeRoot(root), 'verifications'); }
+function gateReceiptPath(root, runId, action) { return join(gateDirectory(root), `${runId}-${action}.json`); }
+function verificationPath(root, runId) { return join(verificationDirectory(root), `${runId}.json`); }
+function mutexRoot(root) { return join(runtimeRoot(root), 'mutexes'); }
+
+function sleep(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function withMutex(root, name, callback, { timeoutMs = 30000, staleMs = 60000 } = {}) {
+  const directory = mutexRoot(root);
+  const path = join(directory, `${name}.lock`);
+  const owner = `${process.pid}-${randomUUID()}`;
+  const deadline = Date.now() + timeoutMs;
+  let expectedRecoveryOwner = null;
+  let recoveryClaim = null;
+  const renameSync = (source, destination) => {
+    const ownerPath = join(source, 'owner.json');
+    const currentOwner = existsSync(ownerPath) ? JSON.parse(readFileSync(ownerPath, 'utf8')) : null;
+    if (!expectedRecoveryOwner || currentOwner?.owner !== expectedRecoveryOwner) {
+      const error = new Error('stale mutex generation changed before recovery claim');
+      error.code = 'EEXIST';
+      throw error;
+    }
+    const claimPath = join(source, 'recovery-claim.json');
+    const claim = { owner: expectedRecoveryOwner, claimant: `${process.pid}-${randomUUID()}`, pid: process.pid, claimedAt: now() };
+    let descriptor;
+    try {
+      descriptor = openSync(claimPath, 'wx');
+      writeFileSync(descriptor, `${JSON.stringify(claim)}\n`);
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
+    }
+    const confirmedOwner = existsSync(ownerPath) ? JSON.parse(readFileSync(ownerPath, 'utf8')) : null;
+    const confirmedClaim = existsSync(claimPath) ? JSON.parse(readFileSync(claimPath, 'utf8')) : null;
+    if (confirmedOwner?.owner !== expectedRecoveryOwner || confirmedClaim?.claimant !== claim.claimant) {
+      const error = new Error('stale mutex generation changed after recovery claim');
+      error.code = 'EEXIST';
+      throw error;
+    }
+    atomicRenameSync(source, destination);
+    recoveryClaim = claim;
+  };
+  mkdirSync(directory, { recursive: true });
+  while (true) {
+    try {
+      mkdirSync(path);
+      writeFileSync(join(path, 'owner.json'), `${JSON.stringify({ owner, pid: process.pid, acquiredAt: now() })}\n`);
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      try {
+        if (Date.now() - statSync(path).mtimeMs > staleMs) {
+          const metadataPath = join(path, 'owner.json');
+          const observed = existsSync(metadataPath) ? JSON.parse(readFileSync(metadataPath, 'utf8')) : null;
+          let ownerAlive = false;
+          if (Number.isSafeInteger(observed?.pid) && observed.pid > 0) {
+            try {
+              process.kill(observed.pid, 0);
+              ownerAlive = true;
+            } catch (probeError) {
+              ownerAlive = probeError.code === 'EPERM';
+            }
+          }
+          if (!ownerAlive) {
+            const confirmed = existsSync(metadataPath) ? JSON.parse(readFileSync(metadataPath, 'utf8')) : null;
+            if (confirmed?.owner === observed?.owner && Date.now() - statSync(path).mtimeMs > staleMs) {
+              expectedRecoveryOwner = observed.owner;
+              recoveryClaim = null;
+              const tombstone = `${path}.stale-${randomUUID()}`;
+              try { renameSync(path, tombstone); }
+              catch (renameError) {
+                if (['ENOENT', 'EEXIST', 'EPERM', 'EACCES'].includes(renameError.code)) continue;
+                throw renameError;
+              }
+              const tombstoneMetadataPath = join(tombstone, 'owner.json');
+              const tombstoneClaimPath = join(tombstone, 'recovery-claim.json');
+              const retired = existsSync(tombstoneMetadataPath) ? JSON.parse(readFileSync(tombstoneMetadataPath, 'utf8')) : null;
+              const retiredClaim = existsSync(tombstoneClaimPath) ? JSON.parse(readFileSync(tombstoneClaimPath, 'utf8')) : null;
+              if (retired?.owner !== observed?.owner || retiredClaim?.claimant !== recoveryClaim?.claimant || retiredClaim?.owner !== observed?.owner) {
+                fail(`stale ${name} recovery generation verification failed.`, 2);
+              }
+              rmSync(tombstone, { recursive: true, force: true });
+              continue;
+            }
+          }
+        }
+      } catch (statError) {
+        if (statError.code === 'ENOENT') continue;
+        throw statError;
+      }
+      if (Date.now() >= deadline) fail(`timed out waiting for ${name} transaction lock.`, 2);
+      sleep(10);
+    }
+  }
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    try {
+      const metadataPath = join(path, 'owner.json');
+      const metadata = existsSync(metadataPath) ? JSON.parse(readFileSync(metadataPath, 'utf8')) : null;
+      if (metadata?.owner === owner) rmSync(path, { recursive: true, force: true });
+    } catch {
+      // A stale-lock recovery may already have removed this owner's directory.
+    }
+    process.removeListener('exit', release);
+  };
+  process.once('exit', release);
+  try { return callback(); }
+  finally { release(); }
+}
 
 function validateStringArray(value, label, errors, { nonEmpty = false } = {}) {
   if (!Array.isArray(value) || !value.every((item) => typeof item === 'string' && item.trim())) errors.push(`${label} must be a string array`);
@@ -167,6 +428,7 @@ export function loopConfigErrors(config) {
     else {
       unknownKeys(pattern.state, new Set(['summaryFile', 'runLogFile', 'retentionDays']), `${at}.state`, errors);
       if (!safeRelative(pattern.state.summaryFile) || !safeRelative(pattern.state.runLogFile)) errors.push(`${at}.state paths must be safe relative paths`);
+      if (pattern.state.retentionDays !== undefined && (!Number.isSafeInteger(pattern.state.retentionDays) || pattern.state.retentionDays < 0)) errors.push(`${at}.state.retentionDays must be a non-negative integer`);
     }
     const budget = pattern.budget;
     if (budget) unknownKeys(budget, new Set(['maxRunsPerDay', 'maxTokensPerRun', 'maxTokensPerDay', 'maxAttempts', 'maxActionsPerDay', 'on80Percent', 'onExceed']), `${at}.budget`, errors);
@@ -223,13 +485,15 @@ function defaultState(config) {
       level: pattern.level,
     }])),
     slots: {},
+    highPriority: [],
+    watch: [],
+    noise: [],
     inbox: [],
   };
 }
 
-function embeddedState(root) {
-  const path = statePath(root);
-  if (!existsSync(path)) return null;
+function embeddedStateAt(path) {
+  if (!existsSync(path) || !statSync(path).isFile()) return null;
   const contents = readFileSync(path, 'utf8');
   const start = contents.indexOf(STATE_START);
   const end = contents.indexOf(STATE_END);
@@ -238,14 +502,25 @@ function embeddedState(root) {
   try { return JSON.parse(block); } catch { return null; }
 }
 
+function embeddedState(root, config) {
+  for (const path of statePaths(root, config)) {
+    const state = embeddedStateAt(path);
+    if (state) return state;
+  }
+  return null;
+}
+
 function readState(root, config) {
   let state = null;
   if (existsSync(internalStatePath(root))) {
     try { state = parseJson(internalStatePath(root)); } catch { state = null; }
   }
-  state ??= embeddedState(root) ?? defaultState(config);
+  state ??= embeddedState(root, config) ?? defaultState(config);
   state.patterns ??= {};
   state.slots ??= {};
+  state.highPriority ??= [];
+  state.watch ??= [];
+  state.noise ??= [];
   state.inbox ??= [];
   for (const pattern of config.patterns) state.patterns[pattern.id] ??= defaultState({ patterns: [pattern] }).patterns[pattern.id];
   return state;
@@ -258,7 +533,19 @@ function stateMarkdown(config, state) {
   }).join('\n');
   const inbox = state.inbox.filter((item) => item.status === 'open');
   const inboxLines = inbox.length ? inbox.map((item) => `- [ ] ${item.id} · ${item.loopId}: ${item.message}`).join('\n') : '- —';
-  return `# Loop State\n\nGenerated by \`harness loop\`. Do not hand-edit the embedded machine state.\n\nLast updated: ${state.updatedAt ?? '—'}\n\n## Patterns\n\n| Pattern | Enabled | Level | Mode | Controller | Last run | Outcome |\n|---|---|---|---|---|---|---|\n${rows}\n\n## Human Inbox\n\n${inboxLines}\n\n${STATE_START}\n\`\`\`json\n${JSON.stringify(state, null, 2)}\n\`\`\`\n${STATE_END}\n`;
+  const itemLines = (items) => items.length ? items.map((item) => `- ${item.id}: ${item.message}`).join('\n') : '- —';
+  return `# Loop State\n\nGenerated by \`harness loop\`. Do not hand-edit the embedded machine state.\n\nLast updated: ${state.updatedAt ?? '—'}\n\n## Patterns\n\n| Pattern | Enabled | Level | Mode | Controller | Last run | Outcome |\n|---|---|---|---|---|---|---|\n${rows}\n\n## High Priority\n\n${itemLines(state.highPriority)}\n\n## Watch List\n\n${itemLines(state.watch)}\n\n## Recent Noise\n\n${itemLines(state.noise)}\n\n## Human Inbox\n\n${inboxLines}\n\n${STATE_START}\n\`\`\`json\n${JSON.stringify(state, null, 2)}\n\`\`\`\n${STATE_END}\n`;
+}
+
+export function freshLoopEvidence(config) {
+  const state = defaultState(config);
+  return {
+    state: [...new Set(config.patterns.map((pattern) => pattern.state.summaryFile))].map((path) => ({ path, contents: stateMarkdown(config, state) })),
+    runLogs: [...new Set(config.patterns.map((pattern) => pattern.state.runLogFile))].map((path) => ({
+      path,
+      contents: '# Loop Run Log\n\nOne JSON object per completed run. Entries are append-only and may be pruned after the configured retention period.\n\n## Runs\n\n',
+    })),
+  };
 }
 
 function configHeader(config, name = '') {
@@ -298,22 +585,19 @@ function writeProjectionFile(root, name, config) {
 function writeConfigProjections(root, config) {
   for (const name of ['LOOP.md', 'loop-budget.md', 'loop-constraints.md', 'gate.yaml']) writeProjectionFile(root, name, config);
   const registryPath = join(root, 'patterns', 'registry.json');
-  const existing = existsSync(registryPath) ? parseJson(registryPath) : { schemaVersion: 1, patterns: [] };
-  existing.schemaVersion = 1;
-  existing.configHash = configDigest(config);
-  existing.patterns = config.patterns.map((pattern) => {
-    const old = existing.patterns.find((entry) => entry.id === pattern.id) ?? {};
-    const candidate = join(root, 'patterns', `${pattern.id}.md`);
-    return { ...old, id: pattern.id, level: pattern.level, mode: pattern.mode, file: existsSync(candidate) ? `${pattern.id}.md` : old.file ?? null };
-  });
-  writeJson(registryPath, existing);
+  const existing = existsSync(registryPath) ? parseJson(registryPath) : {};
+  writeJson(registryPath, expectedRegistry(config, existing));
 }
 
 function writeState(root, config, state) {
+  const projections = statePaths(root, config);
   state.configHash = configDigest(config);
   state.updatedAt = now();
   writeJson(internalStatePath(root), state);
-  writeFileSync(statePath(root), stateMarkdown(config, state));
+  for (const path of projections) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, stateMarkdown(config, state));
+  }
 }
 
 function patternById(config, id) {
@@ -323,23 +607,25 @@ function patternById(config, id) {
   return pattern;
 }
 
-function logEntries(root) {
-  if (!existsSync(runLogPath(root))) return [];
+function logEntries(root, config) {
   const entries = [];
-  for (const [index, line] of readFileSync(runLogPath(root), 'utf8').split(/\r?\n/).entries()) {
-    if (!line.trim().startsWith('{')) continue;
-    try {
-      const entry = JSON.parse(line);
-      if (!entry || typeof entry !== 'object' || Array.isArray(entry) || entry.schemaVersion !== 1 || !SAFE_ID.test(entry.runId ?? '') || !SAFE_ID.test(entry.loopId ?? '')) throw new Error('invalid run entry shape');
-      entries.push(entry);
-    } catch (error) { fail(`corrupt loop-run-log.md JSON at line ${index + 1}: ${error.message}.`); }
+  for (const path of runLogPaths(root, config)) {
+    if (!existsSync(path)) continue;
+    for (const [index, line] of readFileSync(path, 'utf8').split(/\r?\n/).entries()) {
+      if (!line.trim().startsWith('{')) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry) || entry.schemaVersion !== 1 || !SAFE_ID.test(entry.runId ?? '') || !SAFE_ID.test(entry.loopId ?? '')) throw new Error('invalid run entry shape');
+        entries.push(entry);
+      } catch (error) { fail(`corrupt ${normalized(relative(root, path))} JSON at line ${index + 1}: ${error.message}.`); }
+    }
   }
   return entries;
 }
 
-function todayEntries(root, id) {
+function todayEntries(root, config, id) {
   const day = now().slice(0, 10);
-  return logEntries(root).filter((entry) => entry.loopId === id && String(entry.finishedAt ?? entry.startedAt ?? '').startsWith(day));
+  return logEntries(root, config).filter((entry) => entry.loopId === id && String(entry.finishedAt ?? entry.startedAt ?? '').startsWith(day));
 }
 
 function runPath(root, runId) {
@@ -407,6 +693,90 @@ function taskOwnsPaths(task, paths) {
   return violations;
 }
 
+function worktreeForRun(root, runId, patternId, { active = true } = {}) {
+  const item = worktreeManifest(root).worktrees.find((entry) => (
+    entry.runId === runId
+    && entry.pattern === patternId
+    && (!active || entry.status === 'active')
+  ));
+  if (!item) return null;
+  const path = safeWorktreePath(root, join(root, item.path));
+  return existsSync(path) ? { item, path } : null;
+}
+
+function worktreeSnapshot(root, worktree) {
+  const changedFiles = changedPaths(worktree.path).sort();
+  const head = run('git', ['rev-parse', 'HEAD'], worktree.path);
+  if (!head.ok) fail(`unable to resolve worktree HEAD: ${head.stderr.trim() || head.error}.`);
+  const tracked = run('git', ['diff', '--binary', 'HEAD', '--'], worktree.path);
+  if (!tracked.ok) fail(`unable to read worktree diff: ${tracked.stderr.trim() || tracked.error}.`);
+  const untracked = run('git', ['ls-files', '--others', '--exclude-standard'], worktree.path);
+  if (!untracked.ok) fail(`unable to enumerate untracked worktree files: ${untracked.stderr.trim() || untracked.error}.`);
+  const digest = createHash('sha256').update(tracked.stdout);
+  for (const path of untracked.stdout.split(/\r?\n/).map((value) => normalized(value.trim())).filter(Boolean).sort()) {
+    digest.update(`\0${path}\0`);
+    const object = run('git', ['hash-object', '--no-filters', '--', path], worktree.path);
+    if (!object.ok) fail(`unable to hash untracked worktree path ${path}: ${object.stderr.trim() || object.error}.`);
+    digest.update(object.stdout.trim());
+  }
+  return {
+    baseSha: worktree.run.baseSha,
+    headSha: head.stdout.trim(),
+    diffHash: digest.digest('hex'),
+    changedFiles,
+  };
+}
+
+function l2Context(root, pattern, args, { requirePaths = false } = {}) {
+  const runId = option(args, '--run-id', '');
+  const taskId = option(args, '--task', '');
+  const paths = option(args, '--paths', '').split(',').map((item) => normalized(item.trim())).filter(Boolean);
+  if (!SAFE_ID.test(runId)) return { error: { trigger: 'run-evidence', reason: 'a safe --run-id is required', paths } };
+  const runRecord = existsSync(runPath(root, runId)) ? parseJson(runPath(root, runId)) : null;
+  if (!runRecord || runRecord.loopId !== pattern.id || runRecord.status !== 'prepared') {
+    return { error: { trigger: 'run-evidence', reason: 'a prepared run for this L2 pattern is required', paths } };
+  }
+  const config = readConfig(root);
+  if (runRecord.configHash !== configDigest(config)) return { error: { trigger: 'config-drift', reason: 'run configuration has drifted', paths } };
+  const task = governanceFor(root, taskId);
+  if (!approvedTask(task)) return { error: { trigger: 'approved-task', reason: 'current approved task evidence is required', paths } };
+  const worktree = worktreeForRun(root, runId, pattern.id);
+  if (!worktree) return { error: { trigger: 'active-worktree', reason: 'an active isolated worktree is required', paths } };
+  worktree.run = runRecord;
+  const lock = lockRecords(root).find((entry) => entry.owner === runId && (!entry.expiresAt || Date.parse(entry.expiresAt) > Date.now()));
+  if (!lock) return { error: { trigger: 'path-lock', reason: 'a live run-owned path lock is required', paths } };
+  if (requirePaths && paths.length === 0) return { error: { trigger: 'paths-required', reason: 'explicit planned paths are required', paths } };
+  return { runId, runRecord, taskId, task, worktree, lock, paths };
+}
+
+function l2PathDecision(pattern, task, lock, paths) {
+  const unsafe = paths.filter((path) => !safeRelative(path));
+  if (unsafe.length) return { trigger: 'unsafe-path', reason: 'paths must be safe repository-relative paths', paths: unsafe };
+  const deny = matching(paths, pattern.scope.denyPaths);
+  if (deny.length) return { trigger: 'denylist', reason: 'changed paths match denylist', paths: deny };
+  const unwatched = paths.filter((path) => matching([path], pattern.scope.watchPaths).length === 0);
+  if (unwatched.length) return { trigger: 'scope-watch', reason: 'changed paths are outside the pattern watch scope', paths: unwatched };
+  if (paths.length > pattern.scope.maxChangedFiles) return { trigger: 'file-count', reason: `${paths.length} exceeds maxChangedFiles ${pattern.scope.maxChangedFiles}`, paths };
+  const ownership = taskOwnsPaths(task, paths);
+  if (ownership.length) return { trigger: 'task-path-ownership', reason: 'changed paths are outside participating role ownership', paths: ownership };
+  const unlocked = paths.filter((path) => !lock.paths.some((held) => globToRegex(held).test(path)));
+  if (unlocked.length) return { trigger: 'path-lock', reason: 'the run lock does not cover every path', paths: unlocked };
+  return null;
+}
+
+function latestGateDecision(record, action) {
+  return [...(record.gateDecisions ?? [])].reverse().find((decision) => decision.action === action && decision.allowed === true) ?? null;
+}
+
+function persistGateDecision(root, context, decision) {
+  const record = parseJson(runPath(root, context.runId));
+  record.gateDecisions ??= [];
+  record.gateDecisions.push(decision);
+  if (decision.makerSession) record.makerSession = decision.makerSession;
+  writeJsonAtomic(runPath(root, context.runId), record);
+  writeJsonAtomic(gateReceiptPath(root, context.runId, decision.action), decision);
+}
+
 function breakerDecision(pattern, ledger) {
   const attempts = Array.isArray(ledger?.attempts) ? ledger.attempts : [];
   if (attempts.length >= pattern.escalation.maxIterations) return { blocked: true, trigger: 'max-iterations', reason: `attempt limit ${pattern.escalation.maxIterations} reached` };
@@ -461,6 +831,7 @@ function commandInit(root, args) {
         const registry = parseJson(registryPath);
         registry.patterns.push({ id, level: next.level, mode: next.mode, template: templateId, file: null });
         writeJson(registryPath, registry);
+        writeConfigProjections(root, config);
         const state = readState(root, config);
         state.patterns[id] = defaultState({ patterns: [next] }).patterns[id];
         writeState(root, config, state);
@@ -472,10 +843,24 @@ function commandInit(root, args) {
 
 function commandValidate(root, args) {
   const json = args.includes('--json');
+  const strict = args.includes('--strict');
   const config = existsSync(configPath(root)) ? parseJson(configPath(root), 'loop.config.json') : null;
   const errors = config ? loopConfigErrors(config) : ['missing loop.config.json'];
-  const required = ['STATE.md', 'loop-budget.md', 'loop-constraints.md', 'loop-run-log.md', 'gate.yaml', 'patterns/registry.json'];
-  for (const file of required) if (!existsSync(join(root, file))) errors.push(`missing ${file}`);
+  const required = ['loop-budget.md', 'loop-constraints.md', 'gate.yaml', 'patterns/registry.json'];
+  if (config && Array.isArray(config.patterns)) {
+    required.push(
+      ...config.patterns.flatMap((pattern) => [pattern.state?.summaryFile, pattern.state?.runLogFile]).filter((path) => safeRelative(path)),
+    );
+  } else required.push('STATE.md', 'loop-run-log.md');
+  for (const file of new Set(required)) {
+    const path = join(root, file);
+    if (!existsSync(path)) errors.push(`missing ${file}`);
+    else if (strict && !statSync(path).isFile()) errors.push(`state reference ${file} must resolve to a regular file`);
+  }
+  const registryPath = join(root, 'patterns', 'registry.json');
+  if (config && loopConfigErrors(config).length === 0 && existsSync(registryPath) && statSync(registryPath).isFile()) {
+    errors.push(...registryErrors(config, parseJson(registryPath)));
+  }
   const result = { ok: errors.length === 0, command: 'validate', errors };
   output(result, json, result.ok ? 'loop validate: PASS' : `loop validate: FAIL ${errors.join('; ')}`);
   if (!result.ok) process.exitCode = 1;
@@ -485,10 +870,14 @@ function commandValidate(root, args) {
 function syncErrors(root, config, state) {
   const errors = [];
   const expectedHash = configDigest(config);
-  if (!existsSync(statePath(root))) errors.push('STATE.md missing');
-  else {
-    const embedded = embeddedState(root);
-    if (!embedded) errors.push('STATE.md machine projection missing or invalid');
+  for (const path of statePaths(root, config)) {
+    const label = normalized(relative(root, path));
+    if (!existsSync(path)) {
+      errors.push(`${label} missing`);
+      continue;
+    }
+    const embedded = embeddedStateAt(path);
+    if (!embedded) errors.push(`${label} machine projection missing or invalid`);
     else {
       const configIds = config.patterns.map((item) => item.id).sort();
       const stateIds = Object.keys(embedded.patterns ?? {}).filter((id) => configIds.includes(id)).sort();
@@ -514,10 +903,7 @@ function syncErrors(root, config, state) {
   const registryPath = join(root, 'patterns', 'registry.json');
   if (existsSync(registryPath)) {
     const registry = parseJson(registryPath);
-    const configIds = config.patterns.map((item) => item.id).sort();
-    const registryIds = (registry.patterns ?? []).map((item) => item.id).sort();
-    if (JSON.stringify(configIds) !== JSON.stringify(registryIds)) errors.push('patterns/registry.json drift');
-    if (registry.configHash !== expectedHash) errors.push('patterns/registry.json config hash drift');
+    errors.push(...registryErrors(config, registry));
   }
   return errors;
 }
@@ -541,7 +927,7 @@ function commandSync(root, args) {
   if (!result.ok) process.exitCode = 1;
 }
 
-function patternMetrics(root, pattern, state, sourceEntries = logEntries(root)) {
+function patternMetrics(root, pattern, state, sourceEntries) {
   const entries = sourceEntries.filter((entry) => entry.loopId === pattern.id);
   const day = now().slice(0, 10);
   const today = entries.filter((entry) => String(entry.finishedAt ?? entry.startedAt ?? '').startsWith(day));
@@ -568,32 +954,61 @@ function commandStatus(root, args) {
   const config = readConfig(root);
   const state = readState(root, config);
   const selected = id ? [patternById(config, id)] : config.patterns;
-  const patterns = selected.map((pattern) => patternMetrics(root, pattern, state));
+  const entries = logEntries(root, config);
+  const patterns = selected.map((pattern) => patternMetrics(root, pattern, state, entries));
   const result = { ok: true, command: 'status', patterns, inboxOpen: state.inbox.filter((item) => item.status === 'open').length };
   output(result, json, patterns.map((item) => `${item.id}: ${item.enabled ? item.paused ? 'paused' : 'ready' : 'disabled'} ${item.level} runs=${item.runs} today=${item.runsToday}`).join('\n'));
 }
 
-function readiness(root, config, state) {
+function readiness(root, config, state, { ignoreRun = '' } = {}) {
   const findings = [];
-  const configuredL1 = [statePath(root), runLogPath(root), join(root, 'loop-budget.md'), join(root, 'loop-constraints.md'), join(root, 'gate.yaml')].every(existsSync);
+  const configuredL1 = [...statePaths(root, config), ...runLogPaths(root, config), join(root, 'loop-budget.md'), join(root, 'loop-constraints.md'), join(root, 'gate.yaml')].every((path) => existsSync(path) && statSync(path).isFile());
   if (!configuredL1) findings.push('L1 runtime artifacts incomplete');
   const l2Patterns = config.patterns.filter((pattern) => pattern.level === 'L2');
-  const configuredL2 = configuredL1 && l2Patterns.some((pattern) => pattern.mode === 'assisted' && pattern.isolation?.mode === 'worktree' && pattern.isolation.lockPaths.length && pattern.roles?.independentVerifier && pattern.gates?.merge === 'never');
+  const l2Ready = (pattern) => (
+    configuredL1
+    && pattern.mode === 'assisted'
+    && pattern.isolation?.mode === 'worktree'
+    && pattern.isolation.lockPaths.length
+    && pattern.roles?.independentVerifier
+    && pattern.gates?.merge === 'never'
+  );
+  const configuredL2 = l2Patterns.some((pattern) => pattern.enabled && l2Ready(pattern));
   if (!configuredL2) findings.push('L2 worktree/lock/verifier capability incomplete');
-  const entries = logEntries(root);
+  const entries = logEntries(root, config).filter((entry) => entry.runId !== ignoreRun);
   const validL1 = entries.filter((entry) => entry.level === 'L1' && entry.evidenceComplete === true && entry.unauthorizedWrites === 0 && !['failed', 'escalated'].includes(entry.outcome));
-  const validL2 = entries.filter((entry) => entry.level === 'L2' && entry.evidenceComplete === true && entry.unauthorizedWrites === 0 && entry.outcome === 'success' && entry.verification?.verifierStatus === 'pass');
+  const validL2 = entries.filter((entry) => entry.level === 'L2' && entry.evidenceComplete === true && entry.unauthorizedWrites === 0 && ['proposal', 'success'].includes(entry.outcome) && entry.verification?.verifierStatus === 'pass' && entry.task?.taskId);
   let observedLevel = 'L0';
   if (validL1.length) observedLevel = 'L1';
   if (validL2.length && config.patterns.some((pattern) => pattern.promotion?.level === 'L2')) observedLevel = 'L2';
   if (!entries.length) findings.push('no proven loop run');
   const configuredScore = configuredL2 ? 100 : configuredL1 ? 70 : 30;
+  const patterns = config.patterns.map((pattern) => {
+    const patternEntries = entries.filter((entry) => entry.loopId === pattern.id);
+    const patternL1 = validL1.filter((entry) => entry.loopId === pattern.id);
+    const patternL2 = validL2.filter((entry) => entry.loopId === pattern.id);
+    const level = patternL2.length && pattern.promotion?.level === 'L2' ? 'L2' : patternL1.length ? 'L1' : 'L0';
+    const capabilityLevel = l2Ready(pattern) ? 'L2-ready' : configuredL1 ? 'L1-ready' : 'L0';
+    return {
+      id: pattern.id,
+      enabled: pattern.enabled,
+      configuredCapability: { level: capabilityLevel, l1: configuredL1, l2: l2Ready(pattern) },
+      observedMaturity: {
+        level,
+        validRuns: patternL1.length + patternL2.length,
+        validL1Runs: patternL1.length,
+        validL2Runs: patternL2.length,
+        totalRuns: patternEntries.length,
+      },
+    };
+  });
   return {
     score: configuredScore,
     level: observedLevel,
     activity: entries.length > 0,
     configuredCapability: { level: configuredL2 ? 'L2-ready' : configuredL1 ? 'L1-ready' : 'L0', l1: configuredL1, l2: configuredL2 },
     observedMaturity: { level: observedLevel, validL1Runs: validL1.length, validL2Runs: validL2.length, totalRuns: entries.length },
+    patterns,
     findings,
     paused: config.patterns.filter((pattern) => state.patterns[pattern.id]?.paused).map((pattern) => pattern.id),
   };
@@ -602,15 +1017,22 @@ function readiness(root, config, state) {
 function commandDoctor(root, args) {
   const json = args.includes('--json');
   const strict = args.includes('--strict');
+  const allowed = new Set(['--json', '--strict', '--ignore-run']);
+  const unknown = args.find((arg) => arg.startsWith('--') && !allowed.has(arg));
+  if (unknown) fail(`unknown loop doctor option: ${unknown}.`);
+  const ignoreRun = option(args, '--ignore-run', '');
+  if (ignoreRun && !SAFE_ID.test(ignoreRun)) fail('--ignore-run must be a safe lowercase run id.');
+  if (ignoreRun && process.env.HARNESS_LOOP_INTERNAL_RUNNER !== ignoreRun) fail('--ignore-run is reserved for the internal Loop runner.');
   const config = readConfig(root);
   const state = readState(root, config);
   const errors = syncErrors(root, config, state);
-  const health = readiness(root, config, state);
+  const health = readiness(root, config, state, { ignoreRun });
   if (strict && health.observedMaturity.level === 'L0') errors.push('strict readiness requires at least one proven L1 run');
   if (strict) {
     for (const pattern of config.patterns) {
       const currentRun = state.patterns[pattern.id]?.currentRun;
       if (!currentRun) continue;
+      if (currentRun === ignoreRun) continue;
       const path = runPath(root, currentRun);
       errors.push(existsSync(path) ? `unfinished currentRun: ${pattern.id}/${currentRun}` : `stale currentRun without evidence: ${pattern.id}/${currentRun}`);
     }
@@ -626,10 +1048,11 @@ function commandDoctor(root, args) {
   if (!result.ok) process.exitCode = 1;
 }
 
-function commandPrepare(root, args) {
+function prepareRun(root, args, { emit = true } = {}) {
   const json = args.includes('--json');
   const id = positionals(args, ['--run-id', '--slot', '--trigger', '--actor'])[0];
   if (!id) fail('loop run prepare requires a pattern id.');
+  return withMutex(root, 'run-prepare', () => {
   const config = readConfig(root);
   const pattern = patternById(config, id);
   const state = readState(root, config);
@@ -639,17 +1062,18 @@ function commandPrepare(root, args) {
   const trigger = option(args, '--trigger', 'manual');
   if (!TRIGGERS.has(trigger)) fail('--trigger must be manual, schedule, or event.');
   const slotKey = option(args, '--slot', `${id}:${now().slice(0, 10)}`);
-  const existing = state.slots[slotKey] ?? logEntries(root).find((entry) => entry.slotKey === slotKey)?.runId;
+  const existing = state.slots[slotKey] ?? logEntries(root, config).find((entry) => entry.slotKey === slotKey)?.runId;
   if (existing) {
-    output({ ok: true, command: 'run.prepare', loopId: id, runId: existing, slotKey, status: 'duplicate', budget: null, paths: null }, json, `loop run prepare: duplicate ${existing}`);
-    return;
+    const result = { ok: true, command: 'run.prepare', loopId: id, runId: existing, slotKey, status: 'duplicate', budget: null, paths: null };
+    if (emit) output(result, json, `loop run prepare: duplicate ${existing}`);
+    return result;
   }
   if (patternState.currentRun) {
     const currentPath = runPath(root, patternState.currentRun);
     const status = existsSync(currentPath) ? parseJson(currentPath).status : 'stale-missing-evidence';
     policyBlock({ ok: false, allowed: false, command: 'run.prepare', loopId: id, trigger: 'active-run', reason: `unfinished currentRun ${patternState.currentRun} (${status}) must be finished or escalated before a new slot`, matchedPaths: [] }, json);
   }
-  const today = todayEntries(root, id);
+  const today = todayEntries(root, config, id);
   const tokensToday = today.reduce((sum, entry) => sum + Number(entry.tokens ?? 0), 0);
   if (today.length >= pattern.budget.maxRunsPerDay || tokensToday >= pattern.budget.maxTokensPerDay) {
     patternState.paused = true;
@@ -686,6 +1110,7 @@ function commandPrepare(root, args) {
     tokens: 0,
     attempts: [],
     evidence: [],
+    inputs: [],
     checks: [],
     evidenceComplete: false,
     unauthorizedWrites: 0,
@@ -698,13 +1123,22 @@ function commandPrepare(root, args) {
   state.slots[slotKey] = runId;
   patternState.currentRun = runId;
   writeState(root, config, state);
-  output({ ok: true, command: 'run.prepare', loopId: id, runId, slotKey, status: 'prepared', budget: record.budget, paths: { run: normalized(relative(root, runPath(root, runId))), ledger: pattern.level === 'L2' ? normalized(relative(root, ledgerPath(root, runId))) : null } }, json, `loop run prepare: ${runId}`);
+  const result = { ok: true, command: 'run.prepare', loopId: id, runId, slotKey, status: 'prepared', budget: record.budget, paths: { run: normalized(relative(root, runPath(root, runId))), ledger: pattern.level === 'L2' ? normalized(relative(root, ledgerPath(root, runId))) : null } };
+  if (emit) output(result, json, `loop run prepare: ${runId}`);
+  return result;
+  });
+}
+
+function commandPrepare(root, args) {
+  return prepareRun(root, args);
 }
 
 function commandAttempt(root, args) {
   const json = args.includes('--json');
   const runId = positionals(args, ['--action', '--outcome', '--error', '--tokens', '--maker-session'])[0];
   if (!runId) fail('loop run attempt requires a run id.');
+  if (!SAFE_ID.test(runId)) fail('run id must be a safe lowercase id.');
+  return withMutex(root, `run-attempt-${runId}`, () => {
   const { run: record } = findRun(root, runId);
   const config = readConfig(root);
   const pattern = patternById(config, record.loopId);
@@ -712,6 +1146,12 @@ function commandAttempt(root, args) {
   const ledger = existsSync(path) ? parseJson(path) : { schemaVersion: 1, runId, loopId: record.loopId, goal: pattern.goal, attempts: [] };
   const outcome = option(args, '--outcome');
   if (!['success', 'failure', 'noop'].includes(outcome)) fail('--outcome must be success, failure, or noop.');
+  if (ledger.attempts.length >= pattern.budget.maxAttempts) {
+    const decision = { blocked: true, trigger: 'max-attempts', reason: `attempt budget ${pattern.budget.maxAttempts} reached` };
+    const result = { ok: false, command: 'run.attempt', loopId: record.loopId, runId, attempt: null, breaker: decision };
+    output(result, json, `loop run attempt: ESCALATE (${decision.trigger})`);
+    process.exit(2);
+  }
   const attempt = { iteration: ledger.attempts.length + 1, timestamp: now(), action: redact(option(args, '--action')), outcome, error: option(args, '--error', '') ? redact(option(args, '--error')) : undefined, tokensUsed: integerOption(args, '--tokens', 0), makerSession: option(args, '--maker-session', '') || undefined };
   if (!attempt.action) fail('--action is required.');
   ledger.attempts.push(attempt);
@@ -720,11 +1160,16 @@ function commandAttempt(root, args) {
   const result = { ok: !decision.blocked, command: 'run.attempt', loopId: record.loopId, runId, attempt, breaker: decision };
   output(result, json, decision.blocked ? `loop run attempt: ESCALATE (${decision.trigger})` : `loop run attempt: recorded #${attempt.iteration}`);
   if (decision.blocked) process.exit(2);
+  });
 }
 
-function appendRunLog(root, record) {
-  if (!existsSync(runLogPath(root))) writeFileSync(runLogPath(root), '# Loop Run Log\n\nOne JSON object per completed run.\n\n## Runs\n\n');
-  appendFileSync(runLogPath(root), `${JSON.stringify({
+function appendRunLog(root, config, pattern, record) {
+  const path = runLogPath(root, config, pattern);
+  if (!existsSync(path)) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '# Loop Run Log\n\nOne JSON object per completed run.\n\n## Runs\n\n');
+  }
+  appendFileSync(path, `${JSON.stringify({
     schemaVersion: 1,
     runId: record.runId,
     loopId: record.loopId,
@@ -746,6 +1191,7 @@ function appendRunLog(root, record) {
     configHash: record.configHash,
     baseSha: record.baseSha,
     checks: record.checks,
+    inputs: record.inputs,
     evidence: record.evidence,
     escalationEvidence: record.escalationEvidence,
     humanDispositions: record.humanDispositions,
@@ -754,21 +1200,78 @@ function appendRunLog(root, record) {
   })}\n`);
 }
 
-function commandFinish(root, args) {
+const TRIAGE_BUCKETS = ['highPriority', 'watch', 'noise', 'inbox'];
+
+function findingOwnershipKey(item) {
+  return `${item.patternId ?? ''}\0${item.sourceAdapter ?? ''}\0${item.id ?? ''}`;
+}
+
+function applyTriageFindings(state, pattern, findings, managedAdapters = []) {
+  if (!Array.isArray(findings)) return;
+  const patternId = pattern.id;
+  const seenAt = now();
+  const retentionMs = (pattern.state.retentionDays ?? 0) * 86_400_000;
+  const managed = new Set(managedAdapters);
+  const activeKeys = new Set(findings.map(findingOwnershipKey));
+  const existing = new Map(TRIAGE_BUCKETS.flatMap((bucket) => state[bucket].map((item) => [findingOwnershipKey(item), item])));
+  for (const bucket of TRIAGE_BUCKETS) {
+    state[bucket] = state[bucket].filter((item) => {
+      if (item.patternId !== patternId || !managed.has(item.sourceAdapter)) return true;
+      const key = findingOwnershipKey(item);
+      if (activeKeys.has(key)) return false;
+      if (item.humanOverride != null) return true;
+      const lastSeen = Date.parse(item.lastSeen ?? item.firstSeen ?? '');
+      return retentionMs > 0 && Number.isFinite(lastSeen) && Date.now() - lastSeen < retentionMs;
+    });
+  }
+  for (const finding of findings) {
+    if (
+      !TRIAGE_BUCKETS.includes(finding.bucket)
+      || !SAFE_ID.test(finding.id ?? '')
+      || finding.patternId !== patternId
+      || typeof finding.sourceAdapter !== 'string'
+      || !finding.sourceAdapter
+      || !managed.has(finding.sourceAdapter)
+    ) fail('runner returned an invalid triage finding.');
+    const key = findingOwnershipKey(finding);
+    const previous = existing.get(key);
+    const item = {
+      ...finding,
+      firstSeen: previous?.firstSeen ?? previous?.createdAt ?? seenAt,
+      lastSeen: seenAt,
+      humanOverride: previous?.humanOverride ?? finding.humanOverride ?? null,
+    };
+    delete item.bucket;
+    if (finding.bucket === 'inbox') {
+      item.status = previous?.status ?? finding.status ?? 'open';
+      item.resolvedAt = previous?.resolvedAt ?? null;
+    } else {
+      delete item.status;
+      delete item.resolvedAt;
+    }
+    state[finding.bucket].push(item);
+  }
+}
+
+function finishRun(root, args, { emit = true, payloadOverride = null } = {}) {
   const json = args.includes('--json');
   const runId = positionals(args, ['--outcome', '--result', '--tokens', '--findings', '--actions', '--escalations', '--maker-session', '--verifier-session', '--verifier-status', '--unauthorized-writes', '--false-positives', '--evidence-complete', '--kill-switch-drill'])[0];
   if (!runId) fail('loop run finish requires a run id.');
+  if (!SAFE_ID.test(runId)) fail('run id must be a safe lowercase id.');
+  const initial = findRun(root, runId).run;
+  return withMutex(root, `run-finish-${initial.loopId}`, () => {
   const { path, run: record } = findRun(root, runId);
   if (record.status === 'finished') {
-    output({ ok: true, command: 'run.finish', loopId: record.loopId, runId, outcome: record.outcome, status: 'duplicate', readiness: null, evidencePath: normalized(relative(root, path)) }, json, `loop run finish: duplicate ${runId}`);
-    return;
+    const result = { ok: true, command: 'run.finish', loopId: record.loopId, runId, outcome: record.outcome, status: 'duplicate', readiness: null, evidencePath: normalized(relative(root, path)) };
+    if (emit) output(result, json, `loop run finish: duplicate ${runId}`);
+    return result;
   }
   const config = readConfig(root);
   const pattern = patternById(config, record.loopId);
   const state = readState(root, config);
   if (record.configHash !== configDigest(config)) policyBlock({ ok: false, allowed: false, command: 'run.finish', loopId: pattern.id, runId, trigger: 'config-drift', reason: 'loop.config.json changed after run prepare', matchedPaths: [] }, json);
-  let payload = {};
-  const resultValue = option(args, '--result', '');
+  let payload = payloadOverride === null ? {} : redactDeep(structuredClone(payloadOverride));
+  const resultValue = payloadOverride === null ? option(args, '--result', '') : '';
   if (resultValue) {
     try { payload = existsSync(resolve(process.cwd(), resultValue)) ? parseJson(resolve(process.cwd(), resultValue), '--result') : JSON.parse(resultValue); }
     catch (error) { fail(`--result must be a JSON object or JSON file: ${error.message}.`); }
@@ -789,6 +1292,23 @@ function commandFinish(root, args) {
   })();
   const outcome = option(args, '--outcome', payload.outcome ?? '');
   if (!OUTCOMES.has(outcome)) fail(`--outcome must be one of ${[...OUTCOMES].join(', ')}.`);
+  if (pattern.level === 'L2' && ['proposal', 'success'].includes(outcome)) {
+    const proposal = latestGateDecision(record, 'proposal');
+    if (!proposal) {
+      policyBlock({ ok: false, allowed: false, command: 'run.finish', loopId: pattern.id, runId, trigger: 'proposal-receipt', reason: 'L2 proposal finish requires the complete maker, scope, and independent verification gate chain', matchedPaths: [] }, json);
+    }
+    const task = governanceFor(root, proposal.taskId);
+    if (!approvedTask(task) || task.approvedVersion !== proposal.approvedVersion) {
+      policyBlock({ ok: false, allowed: false, command: 'run.finish', loopId: pattern.id, runId, trigger: 'task-drift', reason: 'approved task changed after proposal gate', matchedPaths: [] }, json);
+    }
+    const worktree = worktreeForRun(root, runId, pattern.id);
+    if (!worktree) policyBlock({ ok: false, allowed: false, command: 'run.finish', loopId: pattern.id, runId, trigger: 'active-worktree', reason: 'proposal worktree is no longer active', matchedPaths: [] }, json);
+    worktree.run = record;
+    const current = worktreeSnapshot(root, worktree);
+    if (current.headSha !== proposal.headSha || current.diffHash !== proposal.diffHash) {
+      policyBlock({ ok: false, allowed: false, command: 'run.finish', loopId: pattern.id, runId, trigger: 'diff-drift', reason: 'worktree changed after proposal gate', matchedPaths: current.changedFiles }, json);
+    }
+  }
   const tokens = numeric('--tokens', 'tokens', 0);
   if (tokens > pattern.budget.maxTokensPerRun) {
     state.patterns[pattern.id].paused = true;
@@ -797,13 +1317,26 @@ function commandFinish(root, args) {
     policyBlock({ ok: false, allowed: false, command: 'run.finish', loopId: pattern.id, runId, trigger: 'per-run-token-budget', reason: `${tokens} exceeds ${pattern.budget.maxTokensPerRun}`, matchedPaths: [] }, json);
   }
   const actions = numeric('--actions', 'actions', 0);
+  const today = todayEntries(root, config, pattern.id);
+  const tokensToday = today.reduce((sum, entry) => sum + Number(entry.tokens ?? 0), 0);
+  const actionsToday = today.reduce((sum, entry) => sum + Number(entry.actions ?? 0), 0);
+  const budgetTrigger = tokensToday + tokens > pattern.budget.maxTokensPerDay
+    ? 'daily-token-budget'
+    : actionsToday + actions > pattern.budget.maxActionsPerDay ? 'daily-action-budget' : null;
+  if (budgetTrigger) {
+    const limit = budgetTrigger === 'daily-token-budget' ? pattern.budget.maxTokensPerDay : pattern.budget.maxActionsPerDay;
+    const attempted = budgetTrigger === 'daily-token-budget' ? tokensToday + tokens : actionsToday + actions;
+    record.budgetBlock = { trigger: budgetTrigger, attempted, limit, at: now() };
+    writeJson(path, record);
+    state.patterns[pattern.id].paused = true;
+    state.patterns[pattern.id].pauseReason = budgetTrigger;
+    writeState(root, config, state);
+    policyBlock({ ok: false, allowed: false, command: 'run.finish', loopId: pattern.id, runId, trigger: budgetTrigger, reason: `${attempted} exceeds daily limit ${limit}; controller paused`, matchedPaths: [] }, json);
+  }
   const makerSession = option(args, '--maker-session', payload.makerSession ?? '');
   const verifierSession = option(args, '--verifier-session', payload.verifierSession ?? '');
   const verifierStatus = option(args, '--verifier-status', payload.verifierStatus ?? '');
-  if (pattern.level === 'L2' && (actions > 0 || ['proposal', 'success'].includes(outcome))) {
-    if (!makerSession || !verifierSession || makerSession === verifierSession || verifierStatus !== 'pass') {
-      policyBlock({ ok: false, allowed: false, command: 'run.finish', loopId: pattern.id, runId, trigger: 'independent-verifier', reason: 'L2 action requires distinct maker/verifier sessions and verifier-status pass', matchedPaths: [] }, json);
-    }
+  if (pattern.level === 'L2' && ['proposal', 'success'].includes(outcome)) {
     const ledger = existsSync(ledgerPath(root, runId)) ? parseJson(ledgerPath(root, runId)) : { attempts: [] };
     const breaker = breakerDecision(pattern, ledger);
     if (breaker.blocked) policyBlock({ ok: false, allowed: false, command: 'run.finish', loopId: pattern.id, runId, trigger: breaker.trigger, reason: breaker.reason, matchedPaths: [] }, json);
@@ -819,13 +1352,16 @@ function commandFinish(root, args) {
   if (!Array.isArray(checks) || !checks.every((check) => check && typeof check.id === 'string' && ['pass', 'fail', 'skipped'].includes(check.status) && (check.evidence === undefined || typeof check.evidence === 'string'))) fail('--result.checks must be an array of {id,status,evidence?}.');
   const evidence = payload.evidence ?? [];
   if (!Array.isArray(evidence) || !evidence.every((item) => item && typeof item.id === 'string' && typeof item.type === 'string' && typeof item.subject === 'string')) fail('--result.evidence must be an array of {id,type,subject,...}.');
+  const inputs = payload.inputReceipts ?? [];
+  if (!Array.isArray(inputs) || !inputs.every((item) => item && typeof item.id === 'string' && ['pass', 'fail'].includes(item.status) && typeof item.evidence === 'string')) fail('runner input receipts are invalid.');
   const humanDispositions = payload.humanDispositions ?? [];
   if (!Array.isArray(humanDispositions) || !humanDispositions.every((item) => item && typeof item.findingId === 'string' && ['accept', 'dismiss', 'defer'].includes(item.decision))) fail('--result.humanDispositions is invalid.');
   const escalationEvidence = payload.escalationEvidence ?? [];
   if (!Array.isArray(escalationEvidence) || !escalationEvidence.every((item) => item && typeof item.trigger === 'string' && typeof item.reason === 'string')) fail('--result.escalationEvidence is invalid.');
   const evidenceComplete = args.includes('--evidence-complete') ? option(args, '--evidence-complete') === 'true' : payload.evidenceComplete === true;
-  if (evidenceComplete && (!checks.length || checks.some((check) => check.status !== 'pass' || !check.evidence?.trim()) || !evidence.length)) fail('evidenceComplete=true requires non-empty passing checks with evidence and structured evidence records.');
+  if (evidenceComplete && (!checks.length || checks.some((check) => !check.evidence?.trim()) || !evidence.length)) fail('evidenceComplete=true requires non-empty check receipts with evidence and structured evidence records.');
   record.checks = checks;
+  record.inputs = inputs;
   record.evidence = evidence;
   record.humanDispositions = humanDispositions;
   record.escalationEvidence = escalationEvidence;
@@ -834,26 +1370,427 @@ function commandFinish(root, args) {
   record.falsePositives = numeric('--false-positives', 'falsePositives', 0);
   record.killSwitchDrill = args.includes('--kill-switch-drill') ? option(args, '--kill-switch-drill') === 'true' : payload.killSwitchDrill === true;
   record.outcome = outcome;
-  record.task = payload.taskId ? { taskId: payload.taskId, approvedVersion: payload.approvedVersion ?? null } : null;
-  record.verification = { makerSession: makerSession || null, verifierSession: verifierSession || null, verifierStatus: verifierStatus || null };
-  record.evidenceHash = hash(JSON.stringify({ runId, outcome, tokens, actions, configHash: record.configHash, baseSha: record.baseSha, checks: record.checks, evidence: record.evidence, task: record.task, humanDispositions: record.humanDispositions, verification: record.verification }));
+  const proposalEvidence = pattern.level === 'L2' ? latestGateDecision(record, 'proposal') : null;
+  record.task = proposalEvidence
+    ? { taskId: proposalEvidence.taskId, approvedVersion: proposalEvidence.approvedVersion }
+    : payload.taskId ? { taskId: payload.taskId, approvedVersion: payload.approvedVersion ?? null } : null;
+  record.verification = proposalEvidence
+    ? { makerSession: proposalEvidence.makerSession, verifierSession: proposalEvidence.verifierSession, verifierStatus: 'pass', checksHash: proposalEvidence.checksHash }
+    : { makerSession: makerSession || null, verifierSession: verifierSession || null, verifierStatus: verifierStatus || null };
+  record.evidenceHash = hash(JSON.stringify({ runId, outcome, tokens, actions, configHash: record.configHash, baseSha: record.baseSha, checks: record.checks, inputs: record.inputs, evidence: record.evidence, task: record.task, humanDispositions: record.humanDispositions, verification: record.verification }));
   writeJson(path, record);
-  appendRunLog(root, record);
+  appendRunLog(root, config, pattern, record);
   const patternState = state.patterns[pattern.id];
   patternState.currentRun = null;
   patternState.lastRun = record.finishedAt;
   patternState.lastOutcome = outcome;
-  if (outcome === 'escalated') {
-    state.inbox.push({ id: `inbox-${randomUUID().slice(0, 8)}`, loopId: pattern.id, message: `Run ${runId} escalated`, status: 'open', createdAt: now(), resolvedAt: null });
+  applyTriageFindings(state, pattern, payload.triageFindings, payload.managedAdapters);
+  if (outcome === 'escalated' && !Array.isArray(payload.triageFindings)) {
+    const seenAt = now();
+    state.inbox.push({ id: `inbox-${randomUUID().slice(0, 8)}`, loopId: pattern.id, message: `Run ${runId} escalated`, source: 'run.finish', firstSeen: seenAt, lastSeen: seenAt, status: 'open', humanOverride: null, resolvedAt: null });
+  }
+  if (pattern.level === 'L2') {
+    for (const [slot, value] of Object.entries(state.slots)) if (value === runId) delete state.slots[slot];
+    releaseLock(root, runId);
+    const manifest = worktreeManifest(root);
+    const worktree = manifest.worktrees.find((item) => item.runId === runId);
+    if (worktree) {
+      worktree.status = outcome === 'failed' ? 'rejected' : outcome === 'escalated' ? 'escalated' : 'proposed';
+      worktree.updatedAt = record.finishedAt;
+      writeWorktreeManifest(root, manifest);
+    }
   }
   writeState(root, config, state);
   const health = readiness(root, config, state);
-  output({ ok: true, command: 'run.finish', loopId: pattern.id, runId, outcome, readiness: health, evidencePath: normalized(relative(root, path)) }, json, `loop run finish: ${runId} -> ${outcome}`);
+  const result = {
+    ok: true,
+    command: 'run.finish',
+    loopId: pattern.id,
+    runId,
+    outcome,
+    status: 'finished',
+    findings: record.findings,
+    actions: record.actions,
+    escalations: record.escalations,
+    tokens: record.tokens,
+    checks: record.checks,
+    readiness: health,
+    evidencePath: normalized(relative(root, path)),
+  };
+  if (emit) output(result, json, `loop run finish: ${runId} -> ${outcome}`);
+  return result;
+  });
+}
+
+function commandFinish(root, args) {
+  return finishRun(root, args);
+}
+
+function commandVerify(root, args) {
+  const json = args.includes('--json');
+  const allowed = new Set(['--json', '--session']);
+  const unknown = args.find((arg) => arg.startsWith('--') && !allowed.has(arg));
+  if (unknown) fail(`loop run verify rejects caller-supplied status; unknown option: ${unknown}.`);
+  const runId = positionals(args, ['--session'])[0];
+  const verifierSession = option(args, '--session');
+  if (!SAFE_ID.test(runId ?? '') || !SAFE_ID.test(verifierSession)) fail('loop run verify requires a safe run id and --session.');
+  return withMutex(root, `l2-verify-${runId}`, () => {
+    const { run: record } = findRun(root, runId);
+    const config = readConfig(root);
+    const pattern = patternById(config, record.loopId);
+    if (!pattern.enabled || pattern.level !== 'L2') policyBlock({ ok: false, command: 'run.verify', loopId: pattern.id, runId, trigger: 'l2-required', reason: 'verification requires an enabled L2 pattern', matchedPaths: [] }, json);
+    const maker = latestGateDecision(record, 'maker');
+    const scope = latestGateDecision(record, 'scope');
+    if (!maker || !scope) policyBlock({ ok: false, command: 'run.verify', loopId: pattern.id, runId, trigger: 'scope-receipt', reason: 'maker and scope gate receipts are required before verification', matchedPaths: [] }, json);
+    const makerSession = record.makerSession ?? maker.makerSession;
+    if (!makerSession || verifierSession === makerSession) policyBlock({ ok: false, command: 'run.verify', loopId: pattern.id, runId, trigger: 'independent-verifier', reason: 'verifier session must differ from maker session', matchedPaths: [] }, json);
+    const worktree = worktreeForRun(root, runId, pattern.id);
+    if (!worktree) policyBlock({ ok: false, command: 'run.verify', loopId: pattern.id, runId, trigger: 'active-worktree', reason: 'active run worktree is required', matchedPaths: [] }, json);
+    const checks = runDeclaredChecks(worktree.path, pattern).map((check) => ({
+      ...check,
+      cwd: normalized(join(worktree.item.path, check.cwd === '.' ? '' : check.cwd)).replace(/\/$/, ''),
+    }));
+    const receipt = {
+      schemaVersion: 1,
+      command: 'run.verify',
+      runId,
+      loopId: pattern.id,
+      taskId: scope.taskId,
+      approvedVersion: scope.approvedVersion,
+      baseSha: scope.baseSha,
+      headSha: scope.headSha,
+      diffHash: scope.diffHash,
+      configHash: record.configHash,
+      checksHash: hash(JSON.stringify(checks)),
+      verifierSession,
+      makerSession,
+      startedAt: checks[0]?.startedAt ?? now(),
+      finishedAt: checks.at(-1)?.finishedAt ?? now(),
+      checks,
+    };
+    writeJsonAtomic(verificationPath(root, runId), receipt);
+    record.verificationReceipt = normalized(relative(root, verificationPath(root, runId)));
+    record.verification = { makerSession, verifierSession, verifierStatus: checks.every(({ status }) => status === 'pass') ? 'pass' : 'fail' };
+    writeJsonAtomic(runPath(root, runId), record);
+    output(receipt, json, `loop run verify: ${runId} ${record.verification.verifierStatus}`);
+    if (record.verification.verifierStatus !== 'pass') process.exitCode = 2;
+    return receipt;
+  });
+}
+
+function commandRecover(root, args) {
+  const json = args.includes('--json');
+  const allowed = new Set(['--json', '--stale-after']);
+  const unknown = args.find((arg) => arg.startsWith('--') && !allowed.has(arg));
+  if (unknown) fail(`unknown loop run recover option: ${unknown}.`);
+  const staleAfter = integerOption(args, '--stale-after', 3600);
+  return withMutex(root, 'run-recover', () => {
+    const config = readConfig(root);
+    const state = readState(root, config);
+    const manifest = worktreeManifest(root);
+    const recovered = [];
+    const directory = runDirectory(root);
+    if (existsSync(directory)) {
+      for (const name of readdirSync(directory).filter((value) => value.endsWith('.json'))) {
+        const path = join(directory, name);
+        const record = parseJson(path);
+        if (record.status !== 'prepared') continue;
+        const ageSeconds = Math.max(0, (Date.now() - Date.parse(record.startedAt)) / 1000);
+        if (!Number.isFinite(ageSeconds) || ageSeconds < staleAfter) continue;
+        withMutex(root, `run-finish-${record.loopId}`, () => {
+          const current = parseJson(path);
+          if (current.status !== 'prepared') return;
+          const currentAge = Math.max(0, (Date.now() - Date.parse(current.startedAt)) / 1000);
+          if (!Number.isFinite(currentAge) || currentAge < staleAfter) return;
+          const pattern = patternById(config, current.loopId);
+          const recoveredAt = now();
+          current.status = 'stale';
+          current.outcome = 'escalated';
+          current.finishedAt = recoveredAt;
+          current.durationSeconds = Math.max(0, Math.round(currentAge));
+          current.escalations = Math.max(1, Number(current.escalations ?? 0));
+          current.escalationEvidence = [...(current.escalationEvidence ?? []), { trigger: 'stale-run-recovery', reason: `prepared run exceeded ${staleAfter} seconds` }];
+          current.evidence = [...(current.evidence ?? []), { id: 'stale-run-recovery', type: 'command', subject: 'loop run recover' }];
+          current.evidenceHash = hash(JSON.stringify({ runId: current.runId, outcome: current.outcome, recoveredAt, evidence: current.evidence }));
+          writeJsonAtomic(path, current);
+          appendRunLog(root, config, pattern, current);
+          if (state.patterns[current.loopId]?.currentRun === current.runId) state.patterns[current.loopId].currentRun = null;
+          for (const [slot, value] of Object.entries(state.slots)) if (value === current.runId) delete state.slots[slot];
+          releaseLock(root, current.runId);
+          const worktree = manifest.worktrees.find((item) => item.runId === current.runId);
+          if (worktree) { worktree.status = 'stale'; worktree.updatedAt = recoveredAt; }
+          recovered.push({
+            runId: current.runId,
+            loopId: current.loopId,
+            status: 'stale',
+            evidence: 'stale prepared run retired; worktree and patch retained',
+            nextCommand: `node scripts/harness/cli.mjs loop worktree list --json`,
+          });
+        });
+      }
+    }
+    writeState(root, config, state);
+    writeWorktreeManifest(root, manifest);
+    const result = { ok: true, command: 'run.recover', staleAfter, recovered };
+    output(result, json, `loop run recover: ${recovered.length}`);
+    return result;
+  });
+}
+
+function commandExecute(root, args) {
+  const json = args.includes('--json');
+  const valueOptions = ['--run-id', '--slot', '--trigger', '--actor'];
+  const allowed = new Set(['--json', ...valueOptions]);
+  const unknown = args.find((arg) => arg.startsWith('--') && !allowed.has(arg));
+  if (unknown) {
+    if (unknown === '--result') fail('loop run execute does not accept caller-supplied --result.');
+    fail(`unknown loop run execute option: ${unknown}.`);
+  }
+  const positional = positionals(args, valueOptions);
+  if (positional.length !== 1) fail('loop run execute requires exactly one pattern id.');
+  const id = positional[0];
+  const config = readConfig(root);
+  const pattern = patternById(config, id);
+  if (!pattern.enabled) {
+    policyBlock({ ok: false, allowed: false, command: 'run.execute', loopId: id, trigger: 'disabled', reason: 'pattern is disabled', matchedPaths: [] }, json);
+  }
+  if (pattern.level !== 'L1' || pattern.mode !== 'report-only') {
+    policyBlock({ ok: false, allowed: false, command: 'run.execute', loopId: id, trigger: 'unsupported-level', reason: 'execute supports only enabled L1 report-only patterns', matchedPaths: [] }, json);
+  }
+  const prepared = prepareRun(root, args, { emit: false });
+  if (prepared.status === 'duplicate') {
+    const path = runPath(root, prepared.runId);
+    const record = existsSync(path)
+      ? parseJson(path)
+      : logEntries(root, config).find((entry) => entry.runId === prepared.runId) ?? {};
+    const result = {
+      ok: true,
+      command: 'run.execute',
+      loopId: id,
+      runId: prepared.runId,
+      status: 'duplicate',
+      outcome: record.outcome ?? null,
+      findings: record.findings ?? 0,
+      actions: record.actions ?? 0,
+      escalations: record.escalations ?? 0,
+      tokens: record.tokens ?? 0,
+      checks: record.checks ?? [],
+      evidencePath: existsSync(path) ? normalized(relative(root, path)) : null,
+    };
+    output(result, json, `loop run execute: duplicate ${prepared.runId}`);
+    return result;
+  }
+  let runnerResult;
+  try {
+    runnerResult = executePatternRunner(root, pattern, { runId: prepared.runId });
+  } catch (error) {
+    const seenAt = now();
+    const message = redact(error?.message ?? String(error));
+    runnerResult = {
+      outcome: 'escalated',
+      tokens: 0,
+      findings: 1,
+      actions: 0,
+      escalations: 1,
+      escalationEvidence: [{ trigger: 'adapter-execution-failure', reason: message }],
+      evidenceComplete: true,
+      unauthorizedWrites: 0,
+      falsePositives: 0,
+      killSwitchDrill: false,
+      checks: [{
+        id: 'adapter-execution',
+        program: '',
+        args: [],
+        cwd: '.',
+        exitCode: 1,
+        startedAt: seenAt,
+        finishedAt: now(),
+        status: 'fail',
+        evidence: message || 'adapter execution failed',
+      }],
+      evidence: [{ id: 'adapter-execution', type: 'controller', subject: pattern.id }],
+      humanDispositions: [],
+      triageFindings: [{
+        id: `finding-${hash(`adapter-execution\0${pattern.id}`).slice(0, 20)}`,
+        patternId: pattern.id,
+        loopId: pattern.id,
+        bucket: 'inbox',
+        sourceAdapter: 'adapter-execution',
+        source: 'adapter-execution',
+        subject: pattern.id,
+        message: `Adapter execution failed: ${message}`,
+        status: 'open',
+        humanOverride: null,
+      }],
+      managedAdapters: ['adapter-execution'],
+    };
+  }
+  const finished = finishRun(root, [prepared.runId], { emit: false, payloadOverride: runnerResult });
+  const result = { ...finished, command: 'run.execute' };
+  output(result, json, `loop run execute: ${result.runId} -> ${result.outcome}`);
+  return result;
+}
+
+function blockDecision(action, trigger, reason, paths = [], extra = {}) {
+  return { allowed: false, action, trigger, reason, matchedPaths: paths, ...extra };
+}
+
+function l2GateDecision(root, pattern, args) {
+  const action = option(args, '--action');
+  if (!pattern.enabled) return blockDecision(action, 'disabled', 'pattern is disabled');
+  if (pattern.level !== 'L2' || pattern.mode !== 'assisted') return blockDecision(action, 'l2-required', `${action} requires an assisted L2 pattern`);
+  const state = readState(root, readConfig(root));
+  if (state.patterns[pattern.id]?.paused) return blockDecision(action, 'paused', state.patterns[pattern.id].pauseReason ?? 'pattern paused');
+  if (state.patterns[pattern.id]?.budgetMode === 'report-only') return blockDecision(action, 'budget-report-only', 'budget threshold downgraded the controller to report-only');
+  const context = l2Context(root, pattern, args, { requirePaths: action === 'maker' });
+  if (context.error) return blockDecision(action, context.error.trigger, context.error.reason, context.error.paths);
+  if (action === 'maker') {
+    const pathFailure = l2PathDecision(pattern, context.task, context.lock, context.paths);
+    if (pathFailure) return blockDecision(action, pathFailure.trigger, pathFailure.reason, pathFailure.paths);
+    const ledger = existsSync(ledgerPath(root, context.runId)) ? parseJson(ledgerPath(root, context.runId)) : { attempts: [] };
+    const breaker = breakerDecision(pattern, ledger);
+    if (breaker.blocked) return blockDecision(action, breaker.trigger, breaker.reason, context.paths);
+    const makerSession = [...(ledger.attempts ?? [])].reverse().find((attempt) => attempt.makerSession)?.makerSession;
+    if (!makerSession || !SAFE_ID.test(makerSession)) return blockDecision(action, 'maker-session', 'maker gate requires a recorded maker session', context.paths);
+    return {
+      allowed: true,
+      action,
+      trigger: 'ok',
+      reason: 'maker preflight passed',
+      matchedPaths: [],
+      context,
+      evidence: {
+        schemaVersion: 1,
+        action,
+        allowed: true,
+        at: now(),
+        runId: context.runId,
+        loopId: pattern.id,
+        paths: context.paths,
+        taskId: context.taskId,
+        approvedVersion: context.task.approvedVersion,
+        makerSession,
+        worktree: context.worktree.item.path,
+        baseSha: context.runRecord.baseSha,
+      },
+    };
+  }
+  const maker = latestGateDecision(context.runRecord, 'maker');
+  if (!maker) return blockDecision(action, 'maker-receipt', 'a passing maker preflight receipt is required');
+  if (maker.taskId !== context.taskId || maker.approvedVersion !== context.task.approvedVersion) {
+    return blockDecision(action, 'task-drift', 'maker receipt does not match the current approved task');
+  }
+  if (action === 'scope') {
+    if (option(args, '--paths-from', '') !== 'git') return blockDecision(action, 'paths-from-git', 'scope gate requires --paths-from git');
+    const binding = worktreeSnapshot(root, context.worktree);
+    const pathFailure = l2PathDecision(pattern, context.task, context.lock, binding.changedFiles);
+    if (pathFailure) return blockDecision(action, pathFailure.trigger, pathFailure.reason, pathFailure.paths);
+    return {
+      allowed: true,
+      action,
+      trigger: 'ok',
+      reason: 'post-write scope gate passed',
+      matchedPaths: [],
+      context,
+      evidence: {
+        schemaVersion: 1,
+        action,
+        allowed: true,
+        at: now(),
+        runId: context.runId,
+        loopId: pattern.id,
+        taskId: context.taskId,
+        approvedVersion: context.task.approvedVersion,
+        paths: binding.changedFiles,
+        changedFiles: binding.changedFiles,
+        baseSha: binding.baseSha,
+        headSha: binding.headSha,
+        diffHash: binding.diffHash,
+        worktree: context.worktree.item.path,
+      },
+    };
+  }
+  const scope = latestGateDecision(context.runRecord, 'scope');
+  if (!scope) return blockDecision(action, 'scope-receipt', 'a passing scope receipt is required');
+  const receiptPath = verificationPath(root, context.runId);
+  if (!existsSync(receiptPath)) return blockDecision(action, 'verification-receipt', 'an independent verification receipt is required');
+  const receipt = parseJson(receiptPath);
+  const expectedIds = pattern.checks;
+  const actualIds = Array.isArray(receipt.checks) ? receipt.checks.map(({ id }) => id) : [];
+  if (
+    actualIds.length !== expectedIds.length
+    || actualIds.some((id, index) => id !== expectedIds[index])
+  ) return blockDecision(action, 'check-receipt', 'verification check ids must exactly match the pattern declaration');
+  const expectedCwd = context.worktree.item.path;
+  const malformed = receipt.checks.some((check) => (
+    typeof check.program !== 'string'
+    || !check.program
+    || !Array.isArray(check.args)
+    || check.cwd !== expectedCwd
+    || check.exitCode !== 0
+    || check.status !== 'pass'
+    || typeof check.startedAt !== 'string'
+    || typeof check.finishedAt !== 'string'
+    || typeof check.evidence !== 'string'
+    || !check.evidence
+  ));
+  if (malformed) return blockDecision(action, 'worktree-receipt', 'verification checks must be passing command receipts from the run worktree');
+  const commandDrift = receipt.checks.some((check) => {
+    const declared = resolveCheck(context.worktree.path, check.id, { runId: context.runId });
+    if (!declared) return true;
+    const configuredCwd = declared.cwd ?? '.';
+    const expectedCwd = normalized(join(context.worktree.item.path, configuredCwd === '.' ? '' : configuredCwd)).replace(/\/$/, '');
+    return (
+      check.program !== declared.program
+      || JSON.stringify(check.args) !== JSON.stringify(declared.args)
+      || check.cwd !== expectedCwd
+    );
+  });
+  if (commandDrift) return blockDecision(action, 'check-command-drift', 'verification commands do not match the declared check configuration');
+  if (receipt.checksHash !== hash(JSON.stringify(receipt.checks))) return blockDecision(action, 'check-receipt', 'verification checks hash is invalid');
+  if (
+    receipt.runId !== context.runId
+    || receipt.taskId !== context.taskId
+    || receipt.configHash !== context.runRecord.configHash
+    || receipt.baseSha !== scope.baseSha
+    || receipt.headSha !== scope.headSha
+    || receipt.diffHash !== scope.diffHash
+  ) return blockDecision(action, 'diff-drift', 'verification receipt is not bound to the current run, task, SHA, and diff');
+  const makerSession = context.runRecord.makerSession ?? maker.makerSession;
+  if (!receipt.verifierSession || receipt.verifierSession === makerSession) return blockDecision(action, 'independent-verifier', 'verifier session must be independent from maker session');
+  const current = worktreeSnapshot(root, context.worktree);
+  if (current.headSha !== scope.headSha || current.diffHash !== scope.diffHash) return blockDecision(action, 'diff-drift', 'worktree changed after scope verification');
+  return {
+    allowed: true,
+    action,
+    trigger: 'ok',
+    reason: 'proposal evidence chain passed',
+    matchedPaths: [],
+    context,
+    evidence: {
+      schemaVersion: 1,
+      action,
+      allowed: true,
+      at: now(),
+      runId: context.runId,
+      loopId: pattern.id,
+      taskId: context.taskId,
+      approvedVersion: context.task.approvedVersion,
+      baseSha: scope.baseSha,
+      headSha: scope.headSha,
+      diffHash: scope.diffHash,
+      checksHash: receipt.checksHash,
+      makerSession,
+      verifierSession: receipt.verifierSession,
+      worktree: context.worktree.item.path,
+    },
+  };
 }
 
 function gateDecision(root, pattern, args) {
   const action = option(args, '--action');
-  if (!ACTIONS.has(action)) fail(`--action must be one of ${[...ACTIONS].join(', ')}.`);
+  if (!GATE_ACTIONS.has(action)) fail(`--action must be one of ${[...GATE_ACTIONS].join(', ')}.`);
+  if (pattern.level === 'L2' && action === 'write') return { allowed: false, action, trigger: 'maker-gate-required', reason: 'legacy write gate is disabled; run the maker preflight gate before writing', matchedPaths: [] };
   let paths = option(args, '--paths', '').split(',').map((item) => normalized(item.trim())).filter(Boolean);
   if (args.includes('--paths-from')) {
     if (option(args, '--paths-from') !== 'git') fail('--paths-from currently supports only git.');
@@ -904,6 +1841,26 @@ function commandGate(root, args) {
   const id = positionals(gateArgs, ['--action', '--paths', '--paths-from', '--task', '--run-id', '--maker-session', '--verifier-session', '--verifier-status', '--human-evidence'])[0];
   if (!id) fail('loop gate requires a pattern id.');
   const pattern = patternById(readConfig(root), id);
+  const action = option(gateArgs, '--action');
+  if (['maker', 'scope'].includes(action) || (action === 'proposal' && pattern.level === 'L2')) {
+    return withMutex(root, `l2-gate-${option(gateArgs, '--run-id', 'missing')}`, () => {
+      const decision = l2GateDecision(root, pattern, gateArgs);
+      const result = {
+        ok: decision.allowed,
+        allowed: decision.allowed,
+        command: 'gate.check',
+        loopId: id,
+        ...decision,
+        context: undefined,
+        evidence: undefined,
+        ...(decision.evidence ?? {}),
+      };
+      if (!decision.allowed) policyBlock(result, json);
+      persistGateDecision(root, decision.context, decision.evidence);
+      output(result, json, `loop gate: PASS ${id}/${decision.action}`);
+      return result;
+    });
+  }
   const decision = gateDecision(root, pattern, gateArgs);
   const result = { ok: decision.allowed, allowed: decision.allowed, command: 'gate.check', loopId: id, ...decision };
   if (!decision.allowed) policyBlock(result, json);
@@ -971,7 +1928,7 @@ function commandPromote(root, args) {
   if (to === 'L2') {
     const structural = pattern.isolation.mode === 'worktree' && pattern.roles.independentVerifier && pattern.isolation.lockPaths.length && pattern.gates.merge === 'never'
       && existsSync(join(root, 'loop-budget.md')) && existsSync(join(root, 'loop-constraints.md')) && existsSync(join(root, 'gate.yaml'));
-    const runs = logEntries(root).filter((entry) => entry.loopId === id && entry.level === 'L1' && !['failed', 'escalated'].includes(entry.outcome));
+    const runs = logEntries(root, config).filter((entry) => entry.loopId === id && entry.level === 'L1' && !['failed', 'escalated'].includes(entry.outcome));
     const timestamps = runs.map((entry) => Date.parse(entry.finishedAt ?? '')).filter(Number.isFinite).sort((left, right) => left - right);
     const spanDays = timestamps.length > 1 ? (timestamps.at(-1) - timestamps[0]) / 86400000 : 0;
     const evidenceComplete = runs.length > 0 && runs.every((entry) => entry.evidenceComplete === true && typeof entry.evidenceHash === 'string' && entry.evidenceHash.length === 64);
@@ -1013,11 +1970,17 @@ function commandInbox(root, args) {
     const message = option(args, '--message');
     if (!id || !message) fail('loop inbox add requires <pattern> --message <text>.');
     patternById(config, id);
-    const item = { id: option(args, '--id', `inbox-${randomUUID().slice(0, 8)}`), loopId: id, message, status: 'open', createdAt: now(), resolvedAt: null };
+    const seenAt = now();
+    const item = { id: option(args, '--id', `inbox-${randomUUID().slice(0, 8)}`), loopId: id, message, source: 'inbox.add', firstSeen: seenAt, lastSeen: seenAt, status: 'open', humanOverride: null, resolvedAt: null };
     if (!SAFE_ID.test(item.id)) fail('inbox id must be a safe lowercase id.');
     const existing = state.inbox.find((entry) => entry.id === item.id);
     if (existing) {
       if (existing.loopId !== id || existing.message !== message) fail(`inbox id ${item.id} already exists with different content.`);
+      existing.firstSeen ??= existing.createdAt ?? seenAt;
+      existing.lastSeen = seenAt;
+      existing.source ??= 'inbox.add';
+      existing.humanOverride ??= null;
+      writeState(root, config, state);
       output({ ok: true, command: 'inbox.add', item: existing, status: 'duplicate' }, json, `loop inbox add: duplicate ${item.id}`);
       return;
     }
@@ -1080,16 +2043,21 @@ function pathsOverlap(left, right) {
 function acquireLock(root, owner, paths, ttlSeconds) {
   if (!SAFE_ID.test(owner)) fail('lock owner must be a safe lowercase id.');
   if (!paths.length) fail('lock paths must not be empty.');
-  const current = Date.now();
-  for (const record of lockRecords(root)) {
-    if (record.owner === owner) continue;
-    const expired = record.expiresAt && Date.parse(record.expiresAt) <= current;
-    if (expired) continue;
-    if (paths.some((path) => record.paths.some((held) => pathsOverlap(path, held)))) return { ok: false, conflict: record };
-  }
-  const record = { schemaVersion: 1, owner, paths, lockedAt: now(), expiresAt: ttlSeconds ? new Date(current + ttlSeconds * 1000).toISOString() : null };
-  writeJson(join(lockDirectory(root), `${owner}.json`), record);
-  return { ok: true, record };
+  return withMutex(root, 'worktree-locks', () => {
+    const current = Date.now();
+    for (const record of lockRecords(root)) {
+      if (record.owner === owner) continue;
+      const expired = record.expiresAt && Date.parse(record.expiresAt) <= current;
+      if (expired) {
+        if (SAFE_ID.test(record.owner ?? '')) rmSync(join(lockDirectory(root), `${record.owner}.json`), { force: true });
+        continue;
+      }
+      if (paths.some((path) => record.paths.some((held) => pathsOverlap(path, held)))) return { ok: false, conflict: record };
+    }
+    const record = { schemaVersion: 1, owner, paths, lockedAt: now(), expiresAt: ttlSeconds ? new Date(current + ttlSeconds * 1000).toISOString() : null };
+    writeJson(join(lockDirectory(root), `${owner}.json`), record);
+    return { ok: true, record };
+  });
 }
 
 function releaseLock(root, owner) {
@@ -1192,7 +2160,7 @@ function commandMetrics(root, args) {
   const selected = id ? [patternById(config, id)] : config.patterns;
   const generatedAt = now();
   const generatedAtMs = Date.parse(generatedAt);
-  const entries = logEntries(root);
+  const entries = logEntries(root, config);
   const windowEntries = windowDays === null ? entries : entries.filter((entry) => {
     const timestamp = Date.parse(entry.finishedAt ?? entry.startedAt ?? '');
     return Number.isFinite(timestamp) && timestamp >= generatedAtMs - windowDays * 24 * 60 * 60 * 1000 && timestamp <= generatedAtMs;
@@ -1203,7 +2171,7 @@ function commandMetrics(root, args) {
 }
 
 function usage() {
-  console.log(`Usage: harness loop <command> [options]\n\nCommands:\n  init <id> --pattern <pattern> [--dry-run] [--json]\n  validate [--strict] [--json]\n  doctor [--strict] [--json]\n  status [pattern] [--json]\n  sync [--check|--write] [--json]\n  run prepare <pattern> [--run-id id] [--slot key] [--trigger manual|schedule|event] [--json]\n  run attempt <run-id> --action text --outcome success|failure|noop [--error text] [--tokens n] [--json]\n  run finish <run-id> --result <json|file> [--json]\n    compatibility: --outcome no-op|report-only|proposal|success|failed|escalated plus metric flags\n  inbox list [--json]\n  inbox add <pattern> --message text [--id finding-id] [--json]\n  inbox decide <finding-id> --decision accept|dismiss|defer [--by human] [--json]\n  inbox resolve <finding-id> --by human --evidence text [--json]\n  gate check <pattern> --action report|proposal|write|push|merge [--paths csv|--paths-from git] [--json]\n  pause <pattern> --reason text [--actor human] [--json]\n  resume <pattern> --by human --evidence text [--json]\n  promote <pattern> --to L1|L2 --by human --evidence text [--json]\n  worktree create [run-id|--run-id id] --pattern <pattern> [--base ref] [--json]\n  worktree mark --run-id id --status active|rejected|escalated|merged|stale [--json]\n  worktree list|cleanup [options] [--json]\n  worktree lock --owner id --paths csv [--ttl seconds] [--json]\n  worktree unlock --owner id [--json]\n  worktree locks [--json]\n  metrics [pattern] [--days N] [--json]\n\nL2 promotion requires >=10 valid L1 runs across >=5 days, 100% evidence, zero unauthorized writes, <=20% false positives, a kill-switch drill, configured isolation/gates, and named human evidence.\nExit codes: 0 success/no-op; 1 configuration or execution error; 2 policy block or human escalation.`);
+  console.log(`Usage: harness loop <command> [options]\n\nCommands:\n  init <id> --pattern <pattern> [--dry-run] [--json]\n  validate [--strict] [--json]\n  doctor [--strict] [--json]\n  status [pattern] [--json]\n  sync [--check|--write] [--json]\n  run prepare <pattern> [--run-id id] [--slot key] [--trigger manual|schedule|event] [--json]\n  run execute <pattern> [--run-id id] [--slot key] [--trigger manual|schedule|event] [--actor value] [--json]\n  run attempt <run-id> --action text --outcome success|failure|noop [--error text] [--tokens n] [--json]\n  run verify <run-id> --session <independent-session> [--json]\n  run recover [--stale-after seconds] [--json]\n  run finish <run-id> --result <json|file> [--json]\n    compatibility: --outcome no-op|report-only|proposal|success|failed|escalated plus metric flags\n  inbox list [--json]\n  inbox add <pattern> --message text [--id finding-id] [--json]\n  inbox decide <finding-id> --decision accept|dismiss|defer [--by human] [--json]\n  inbox resolve <finding-id> --by human --evidence text [--json]\n  gate check <pattern> --action report|maker|scope|proposal|push|merge [--run-id id] [--task id] [--paths csv|--paths-from git] [--json]\n  pause <pattern> --reason text [--actor human] [--json]\n  resume <pattern> --by human --evidence text [--json]\n  promote <pattern> --to L1|L2 --by human --evidence text [--json]\n  worktree create [run-id|--run-id id] --pattern <pattern> [--base ref] [--json]\n  worktree mark --run-id id --status active|proposed|rejected|escalated|merged|stale [--json]\n  worktree list|cleanup [options] [--json]\n  worktree lock --owner id --paths csv [--ttl seconds] [--json]\n  worktree unlock --owner id [--json]\n  worktree locks [--json]\n  metrics [pattern] [--days N] [--json]\n\nL2 promotion requires >=10 valid L1 runs across >=5 days, 100% evidence, zero unauthorized writes, <=20% false positives, a kill-switch drill, configured isolation/gates, and named human evidence.\nExit codes: 0 success/no-op; 1 configuration or execution error; 2 policy block or human escalation.`);
 }
 
 export function commandLoop(root, args) {
@@ -1218,9 +2186,12 @@ export function commandLoop(root, args) {
     case 'run': {
       const [action, ...runArgs] = rest;
       if (action === 'prepare') commandPrepare(root, runArgs);
+      else if (action === 'execute') commandExecute(root, runArgs);
       else if (action === 'attempt') commandAttempt(root, runArgs);
+      else if (action === 'verify') commandVerify(root, runArgs);
+      else if (action === 'recover') commandRecover(root, runArgs);
       else if (action === 'finish') commandFinish(root, runArgs);
-      else fail('loop run requires prepare, attempt, or finish.');
+      else fail('loop run requires prepare, execute, attempt, verify, recover, or finish.');
       break;
     }
     case 'inbox': commandInbox(root, rest); break;

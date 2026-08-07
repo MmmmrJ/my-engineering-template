@@ -65,7 +65,7 @@ Loop 每轮开始读取 prior state，每轮结束移除已关闭或已失效条
 
 ## Budget 与熔断
 
-- 预算按 pattern 配置最大 runs/day、估算 tokens/day 和 subagents/run。
+- 预算按 pattern 配置最大 runs/day、tokens/run、tokens/day、attempts 和 actions/day。
 - 达到 80% 预算：自动降为 L1 report-only。
 - 达到 100% 或 kill switch 激活：在任何业务写入前退出。
 - 无 actionable item：不得启动 subagent。
@@ -84,14 +84,19 @@ Loop 每轮开始读取 prior state，每轮结束移除已关闭或已失效条
 node scripts/harness/cli.mjs loop init <id> --pattern <pattern> [--dry-run]
 node scripts/harness/cli.mjs loop validate --strict
 node scripts/harness/cli.mjs loop doctor --strict
-node scripts/harness/cli.mjs loop run prepare <id>
+node scripts/harness/cli.mjs loop run execute <l1-pattern> [--slot <key>]
+node scripts/harness/cli.mjs loop run prepare <l2-pattern>
+node scripts/harness/cli.mjs loop run verify <run-id> --session <independent-session>
 node scripts/harness/cli.mjs loop run finish <run-id> --result <json-file>
+node scripts/harness/cli.mjs loop run recover --stale-after <seconds>
 node scripts/harness/cli.mjs loop status
 node scripts/harness/cli.mjs loop inbox list
 node scripts/harness/cli.mjs loop inbox decide <finding-id> --decision <accept|dismiss|defer> --by <human>
 node scripts/harness/cli.mjs loop metrics
 node scripts/harness/cli.mjs loop sync --check
 ```
+
+L1 必须使用 `run execute`：控制器自行完成 prepare、真实输入采集、检查执行、分诊与 finish，并拒绝调用者提供 `--result`。`prepare`/`verify`/`finish` 是 L2 编排和恢复接口；proposal 必须消费绑定当前 run/task/diff/config 的 maker、scope 与独立 verifier receipts。
 
 运行日志至少记录 run id、pattern、level、时间、输入数量、actionable 数、动作、升级、检查结论、成本估算和 outcome。指标定义见 [测试与指标契约](docs/loops/testing-and-metrics.md)。
 

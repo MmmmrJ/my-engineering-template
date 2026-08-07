@@ -51,6 +51,8 @@
     { "path": ".github/workflows/harness.yml", "strategy": "replace-if-unmodified" },
     { "path": ".github/workflows/loop-manual.yml", "strategy": "replace-if-unmodified" },
     { "path": "scripts/harness/cli.mjs", "strategy": "replace-if-unmodified" },
+    { "path": "scripts/harness/lib/loop/adapters.mjs", "strategy": "replace-if-unmodified" },
+    { "path": "scripts/harness/lib/loop/runner.mjs", "strategy": "replace-if-unmodified" },
     { "path": "scripts/harness/lib/loop/runtime.mjs", "strategy": "replace-if-unmodified" },
     { "path": "scripts/harness/run-tests.mjs", "strategy": "replace-if-unmodified" },
     { "path": "tests/harness/cli.test.mjs", "strategy": "replace-if-unmodified" },

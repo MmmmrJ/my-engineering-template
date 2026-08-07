@@ -2,6 +2,21 @@
   "schemaVersion": 1,
   "suiteId": "built-in-patterns-v1",
   "requiredPassRate": 1,
+  "verification": {
+    "testFile": "tests/harness/loop-cli.test.mjs",
+    "kindTests": {
+      "success": "execute owns the full L1 lifecycle|L2 proposal main chain",
+      "no-op": "L1 no-op prepare/finish|daily-triage execute exits with zero cost",
+      "ambiguous-inbox": "inbox stable IDs deduplicate|daily-triage merge and cleanup",
+      "budget-80-degrade": "80% daily budget downgrades",
+      "budget-100-stop": "pause, missing resume evidence, and daily budget",
+      "kill-switch": "pause, missing resume evidence, and daily budget",
+      "deny-or-max-files": "gate blocks deny paths|L2 scope gate independently rejects",
+      "lock-conflict": "worktree locks reject overlapping owners",
+      "verifier-reject": "L2 verify rejects self-verification",
+      "interrupted-stale": "an incomplete run blocks a second slot|L2 recover retires a stale"
+    }
+  },
   "requiredKinds": [
     "success",
     "no-op",

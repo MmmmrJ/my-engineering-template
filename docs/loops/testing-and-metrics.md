@@ -9,6 +9,7 @@
 - 合法最小配置、三个内置 pattern 和所有状态路径可验证。
 - 未知 level、pattern、outcome、重复 id、越界路径和不完整预算被拒绝。
 - `loop.config.json` 与 LOOP/STATE 投影漂移可被 sync/doctor 发现。
+- Registry V2 的 owner、cadence、input adapters、skills、checks、cost、human gates 必须齐全，并与 `loop.config.json` 精确一致；缺字段或手改漂移由 strict validate/CI 拒绝。
 
 ### L1 行为
 

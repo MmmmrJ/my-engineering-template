@@ -5,9 +5,9 @@
 无论平台如何触发，每个 scheduler 都必须：
 
 1. 指定唯一 pattern 和 scheduler owner。
-2. 调用 `loop run prepare <id>`，不得绕过预检直接调用 agent。
-3. 将 prepare 返回的 run id、允许行为和必需证据传给执行者。
-4. 成功、no-op、拒绝、升级或基础设施失败时都调用 `run finish` 或保留可诊断 incomplete run。
+2. L1 调用 `loop run execute <id>`，不得拆开生命周期或传入自报结果。
+3. L2 才由父控制器调用 `prepare`，并顺序执行 maker gate、scope gate、独立 `run verify`、proposal gate 与 finish。
+4. 成功、no-op、拒绝、升级或基础设施失败都必须形成终态证据，或保留可由 `run recover` 诊断的 incomplete run。
 5. 不在 scheduler prompt 中放置 secret。
 6. 安装模板后默认手动；cron 必须由仓库维护者显式启用。
 
@@ -19,8 +19,8 @@
 
 - Environment：本地 checkout；L2 使用后台 worktree。
 - 首次运行：手动 fire immediately，确认输出后再设置周期。
-- Prompt：只描述调用 pattern 和遵守 prepare 返回契约，不复制整份规则。
-- L1 示例语义：准备 `daily-triage`，读取 prior state，report-only，完成后写真实 outcome。
+- Prompt：只描述调用 `loop run execute <pattern>`，不复制整份规则或要求模型自报 outcome。
+- L1 示例语义：执行 `daily-triage`，由 runner 读取 prior state 和真实 adapter，report-only 或 no-op 后自动持久化证据。
 
 Codex Automation 的 UI 配置不在仓库中，owner 应把 cadence、时区、环境和最后验证时间记录到 `loop.config.json` 对应 metadata 或运行手册。若平台不支持稳定后台调度，保留手动入口，不宣称 durable。
 

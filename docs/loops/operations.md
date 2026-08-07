@@ -16,37 +16,34 @@ node scripts/harness/cli.mjs loop status
 
 ## 一轮运行
 
-运行分成 prepare 与 finish，确保外部 agent 或调度器失败时仍可识别未完成 run。
+### L1：由控制器完整执行
 
 ```sh
-node scripts/harness/cli.mjs loop run prepare <id>
-# 根据 prepare 输出执行该 pattern 允许的只读或 L2 工作
-node scripts/harness/cli.mjs loop run finish <run-id> --result <json-file>
+node scripts/harness/cli.mjs loop run execute harness-health --slot <stable-slot>
+node scripts/harness/cli.mjs loop run execute daily-triage --slot <stable-slot>
 ```
 
-主接口的 result JSON 至少给出真实 `outcome`，并按实际情况提供指标和独立验证证据：
+`execute` 是 L1 主接口，控制器按 `prepare → collect inputs → run declared checks → triage → structured result → finish` 执行。它拒绝调用者提供 `--result`，确保 outcome、checks、findings 和 evidence 来自真实 adapter。相同 slot 并发或重放只允许一个新 run；无 actionable item 时以零行动 no-op 结束。
 
-```json
-{
-  "outcome": "report-only",
-  "tokens": 12000,
-  "findings": 2,
-  "actions": 0,
-  "escalations": 1,
-  "evidenceComplete": true,
-  "unauthorizedWrites": 0,
-  "falsePositives": 0,
-  "killSwitchDrill": false,
-  "checks": [
-    { "id": "triage-contract", "status": "pass", "evidence": "2 findings classified; governed paths unchanged" }
-  ],
-  "evidence": [
-    { "id": "triage-report-1", "type": "report", "subject": "STATE.md" }
-  ]
-}
+`harness-health` 执行声明的 Harness/Loop 检查；`daily-triage` 读取完整 Git status 与可用 CI signal，将稳定 findings 持久化到 High Priority、Watch、Noise、Human Inbox，并按 `retentionDays` 去重、刷新或过期。人工 override 始终保留。
+
+### L2：证据链编排
+
+L2 不使用 `execute`。父控制器必须按以下顺序编排，任何一步拒绝都停止后续写入：
+
+```sh
+node scripts/harness/cli.mjs loop run prepare ci-sweeper --run-id <run-id> --slot <slot>
+node scripts/harness/cli.mjs loop worktree create --run-id <run-id> --pattern ci-sweeper --base HEAD
+node scripts/harness/cli.mjs loop worktree lock --owner <run-id> --paths <approved-paths>
+node scripts/harness/cli.mjs loop gate check ci-sweeper --action maker --paths <planned-paths> --task <task-id> --run-id <run-id>
+# Maker 只在返回的 worktree 内产生最小 patch
+node scripts/harness/cli.mjs loop gate check ci-sweeper --action scope --paths-from git --task <task-id> --run-id <run-id>
+node scripts/harness/cli.mjs loop run verify <run-id> --session <independent-session>
+node scripts/harness/cli.mjs loop gate check ci-sweeper --action proposal --task <task-id> --run-id <run-id>
+node scripts/harness/cli.mjs loop run finish <run-id> --outcome proposal --actions 1
 ```
 
-`evidenceComplete: true` 要求至少一个带 evidence 的 passing check 和一个结构化 evidence。L2 有 action 或 `proposal`/`success` 时还必须提供互不相同的 `makerSession`、`verifierSession`、`verifierStatus: "pass"`，以及关联 `taskId`/`approvedVersion`。旧的 `--outcome`/metric flags 只作兼容入口，新集成使用 `--result`。
+Maker gate 绑定批准 task、worktree、lock 与计划路径；scope gate 绑定真实 diff；`run verify` 在该 worktree 运行 pattern 声明的精确 checks，并保存命令、退出码、cwd、base/head SHA、diff/checks hash 与 verifier session。Proposal gate 会重新校验全部 receipts 和配置，不能用 `verifierStatus: pass` 字符串替代。
 
 Prepare 必须：
 
@@ -63,6 +60,8 @@ Finish 必须：
 - 持久化动作、verdict、检查、成本与升级。
 - 标记 run 为终态并安全释放应释放的锁。
 - 失败或进程中断时保留可诊断的 incomplete/stale run。
+
+L1 的 finish 由 `execute` 内部调用。L2 只有 proposal/terminal 路径可由控制器 finish；失败、拒绝或升级仍必须释放控制器状态与锁，但 dirty patch 和证据不得删除。
 
 ## Outcome
 
@@ -128,10 +127,23 @@ node scripts/harness/cli.mjs loop worktree unlock --owner <owner>
 
 ```sh
 node scripts/harness/cli.mjs loop gate check <id> --action report --run-id <run-id>
-node scripts/harness/cli.mjs loop gate check <id> --action proposal --paths <path-a,path-b> --task <task-id> --run-id <run-id> --maker-session <maker> --verifier-session <verifier> --verifier-status pass
+node scripts/harness/cli.mjs loop gate check <id> --action maker --paths <path-a,path-b> --task <task-id> --run-id <run-id>
+node scripts/harness/cli.mjs loop gate check <id> --action scope --paths-from git --task <task-id> --run-id <run-id>
+node scripts/harness/cli.mjs loop gate check <id> --action proposal --task <task-id> --run-id <run-id>
 ```
 
-Action 固定为 `report|proposal|write|push|merge`。V1 的 `push` 与 `merge` 必须被拒绝；`write` 仅在已批准 task、L2、允许路径、有效锁和独立 verifier 证据全部成立时通过。也可使用 `--paths-from git` 检查实际工作树，不得只相信声明路径。
+公开 action 为 `report|maker|scope|proposal|write|push|merge`。V1 的 `push` 与 `merge` 必须被拒绝。L2 写入前使用 maker，写入后使用 scope；proposal 只消费已经持久化且绑定当前 run/task/diff/config 的 verifier receipt。`--paths-from git` 检查真实 tracked/untracked diff，不得只相信 Maker 摘要。
+
+## 中断与恢复
+
+```sh
+node scripts/harness/cli.mjs loop run recover --stale-after <seconds>
+node scripts/harness/cli.mjs loop worktree cleanup --run-id <run-id>
+```
+
+`run recover` 在互斥区内退休超过阈值的 prepared run，清除其 slot/currentRun、释放 run-owned lock、将 worktree 标记为 stale，并写恢复证据。它不会删除 worktree。随后 `worktree cleanup` 仅清理已终态且干净的受管 worktree；发现 tracked、staged 或 untracked patch 时必须报告 skipped 并保留现场。
+
+恢复后依次运行 `loop status`、`loop doctor --strict` 和 `loop sync --check`。若 stale run 关联 task、dirty patch 或不确定 owner，将其放入 Human Inbox，由人决定继续、导出 patch 或废弃；不得通过手工删除 ledger/receipt 来重置预算或绕过门禁。
 
 ## 日常观察
 
@@ -145,7 +157,7 @@ node scripts/harness/cli.mjs loop doctor --strict
 - `status`：当前 level、enabled patterns、last run、Human Inbox、预算和 pause 状态。
 - `metrics`：按时间窗聚合运行质量、成本和安全指标。
 - `sync`：检查机器配置、人读状态、pattern registry 和运行证据漂移。
-- `doctor`：给出阻断项和最多三个优先修复建议；strict 用于 CI/晋级门禁。
+- `doctor`：分别报告 configured capability 与每个 pattern 的 observed maturity；strict 用于 CI/晋级门禁。配置为 L2-ready 不等于观察到 L2。
 
 ## 停用 Pattern
 

@@ -10,9 +10,19 @@
 - 首次启用：`node scripts/harness/cli.mjs init --project`；填写检查配置后运行 `node scripts/harness/cli.mjs doctor --project --strict`。Codex 若提示则执行一次 `/hooks` trust。
 - 完整映射见 `docs/team/SKILL_MATRIX.md`；原则见 `docs/HARNESS.md`；流程见 `docs/WORKFLOW.md`。
 
+## Loop Engineering 路由
+
+- 用户要求周期性巡检、每日分诊、CI 扫描、持续观察或明确输入 `$loop-*` 时，先读 `LOOP.md`、`loop.config.json` 和对应 `.agents/skills/loop-*/SKILL.md`；Loop 是跨时间控制层，不替代下面的 task approval 交付内环。
+- `harness-health` 与 `daily-triage` 的 L1 主入口是 `node scripts/harness/cli.mjs loop run execute <pattern>`。Runner 自行采集输入、执行声明检查并写入结构化状态与证据；调用者不得用自报 `--result` 伪造结果。
+- 无 actionable item 时必须 no-op，不创建 task、不启动 maker/verifier。需要修改产品、应用代码或自动化测试时，转入 `team-orchestrator` 的“方案 → 用户确认 → 实现 → 验收”流程。
+- L2 只允许已批准 task：maker 前置门禁 → 隔离 worktree 写入 → scope 门禁 → 独立 `loop run verify` → proposal 门禁。缺任一绑定 receipt 即 fail-closed；`push`/`merge` 继续由人控制。
+- 调度安装后默认关闭。每个 pattern 只能有一个具名 scheduler owner；并发触发共享 slot lease、预算和路径锁。操作、恢复与成熟度解释见 `docs/loops/README.md`。
+
 ## 文档地图
 
 - `docs/README.md` — 文档总览
+- `LOOP.md` / `docs/loops/` — Loop 运行契约、patterns、调度、恢复、测试与成熟度
+- `patterns/registry.json` — 内置 pattern 的 owner、cadence、输入 adapter、skills、checks、成本与人工门禁机器投影
 - `docs/plans/active/` — 多会话 durable 计划
 - `docs/team/STATUS.md` — 五角色持久状态
 - `docs/ARCHITECTURE.md` — 分层与禁止依赖（业务仓填写）

@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { commandLoop } from './lib/loop/runtime.mjs';
+import { commandLoop, freshLoopEvidence, safeEvidencePath } from './lib/loop/runtime.mjs';
 
 const CLI_FILE = fileURLToPath(import.meta.url);
 const ROOT = resolve(dirname(CLI_FILE), '..', '..');
@@ -43,6 +43,7 @@ const AGENTS_BLOCK_START = '<!-- team-orchestrator:start -->';
 const AGENTS_BLOCK_END = '<!-- team-orchestrator:end -->';
 const GITIGNORE_BLOCK_START = '# harness-security:start';
 const GITIGNORE_BLOCK_END = '# harness-security:end';
+const LOOP_BOOTSTRAP_EVIDENCE = new Set(['STATE.md', 'loop-run-log.md']);
 
 function fail(message, code = 1) {
   console.error(`harness: ${message}`);
@@ -531,6 +532,7 @@ function blockedReason(command) {
 }
 
 function commandGuard(args) {
+  const protocol = args.length === 0;
   let command = args.join(' ').trim();
   if (!command && !process.stdin.isTTY) {
     const input = readFileSync(0, 'utf8').trim();
@@ -539,15 +541,21 @@ function commandGuard(args) {
     }
   }
   if (!command) {
-    console.log('guard: no command provided; allow.');
+    console.log(protocol ? JSON.stringify({ permission: 'allow' }) : 'guard: allow');
     return;
   }
   const reason = blockedReason(command);
   if (reason) {
-    console.error(`BLOCKED by harness guard: ${reason}`);
-    console.error(`Command: ${command}`);
+    if (protocol) {
+      console.log(JSON.stringify({
+        permission: 'deny',
+        user_message: `Blocked by harness guard: ${reason}.`,
+        agent_message: `Blocked by harness guard: ${reason}.`,
+      }));
+      console.error(`guard: blocked (${reason})`);
+    } else console.error(`guard: blocked (${reason})`);
     process.exitCode = 2;
-  } else console.log('guard: allow.');
+  } else console.log(protocol ? JSON.stringify({ permission: 'allow' }) : 'guard: allow');
 }
 
 function configMigration(args) {
@@ -968,6 +976,45 @@ function writeLock(destination, lock) {
   writeFileSync(join(destination, 'harness.lock.json'), `${JSON.stringify(lock, null, 2)}\n`);
 }
 
+function installLoopSeedConfig(destination) {
+  for (const path of [join(destination, 'loop.config.json'), join(ROOT, 'loop.config.json')]) {
+    if (!existsSync(path)) continue;
+    try {
+      const config = JSON.parse(text(path));
+      if (Array.isArray(config.patterns) && config.patterns.length > 0 && config.patterns.every((pattern) => {
+        const files = [pattern.state?.summaryFile, pattern.state?.runLogFile];
+        return files.every((file) => typeof file === 'string' && file.trim());
+      })) return config;
+    } catch {
+      // A target-owned invalid Loop configuration is preserved; use the template only to seed inert evidence files.
+    }
+  }
+  fail('unable to load a valid Loop configuration for clean install evidence.');
+}
+
+function preflightCleanLoopEvidence(destination) {
+  const evidence = freshLoopEvidence(installLoopSeedConfig(destination));
+  return [...evidence.state, ...evidence.runLogs].map((entry) => ({
+    ...entry,
+    output: safeEvidencePath(destination, entry.path),
+  }));
+}
+
+function seedCleanLoopEvidence(destination, entries, dryRun, report) {
+  for (const entry of entries) {
+    const output = safeEvidencePath(destination, entry.path);
+    if (existsSync(output)) {
+      report(`keep ${entry.path} (target-owned evidence)`);
+      continue;
+    }
+    report(`seed clean ${entry.path}`);
+    if (!dryRun) {
+      mkdirSync(dirname(output), { recursive: true });
+      writeFileSync(output, entry.contents);
+    }
+  }
+}
+
 function commandInstall(args) {
   let mode = 'merge';
   let dryRun = false;
@@ -982,6 +1029,7 @@ function commandInstall(args) {
   if (!target) fail('install requires a target directory.');
   const destination = resolve(process.cwd(), target);
   const report = (message) => console.log(`${dryRun ? 'DRY' : 'DO '} ${message}`);
+  const cleanEvidence = preflightCleanLoopEvidence(destination);
   if (!dryRun) mkdirSync(destination, { recursive: true });
   const inventory = sourceInventory();
   for (const entry of inventory) {
@@ -989,6 +1037,7 @@ function commandInstall(args) {
     const source = join(ROOT, file);
     const output = join(destination, file);
     if (file === 'AGENTS.md' || file === '.gitignore') continue;
+    if (LOOP_BOOTSTRAP_EVIDENCE.has(file)) continue;
     if (existsSync(output) && mode === 'merge') {
       if (strategy === 'generated') report(`generate ${file}`);
       else { report(`keep ${file} (${strategy})`); continue; }
@@ -998,6 +1047,7 @@ function commandInstall(args) {
       cpSync(source, output);
     }
   }
+  seedCleanLoopEvidence(destination, cleanEvidence, dryRun, report);
   const sourceAgents = text(join(ROOT, 'AGENTS.md'));
   const outputAgents = join(destination, 'AGENTS.md');
   if (mode === 'override' && existsSync(outputAgents)) {

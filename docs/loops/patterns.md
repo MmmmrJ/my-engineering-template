@@ -10,6 +10,19 @@ Pattern 是可重复运行的产品契约，不只是 prompt。每个 pattern �
 | `daily-triage` | 维护工程优先级和 Human Inbox | enabled / L1 | 默认手动；可显式设为每日 | 低 |
 | `ci-sweeper` | 分诊 CI 失败并为明确小问题准备已验证 patch | disabled / L2-ready | CI failure 或手动 | 中 |
 
+## Registry V2
+
+`patterns/registry.json` 是 `loop.config.json` 的机器投影，不是第二份可手改配置。每个条目固定包含：
+
+- `owner`：执行 owner 角色和 verifier 角色。
+- `cadence`：trigger、fireImmediately 与 off-hours 策略。
+- `inputAdapters`：runner 实际使用的输入来源。
+- `skills` 与 `checks`：所需共享 skill 和精确检查 ID。
+- `cost`：runs/day、tokens/run、tokens/day 与 actions/day 上限。
+- `humanGates`：task approval、独立 verifier、push 和 merge 策略。
+
+修改 `loop.config.json` 后运行 `node scripts/harness/cli.mjs loop sync --write` 重建 registry；`loop validate --strict`、`loop sync --check` 和 CI 会拒绝缺字段、未知元数据或与配置不一致的条目。新增实例继承其 template 的 input adapters，但仍从 L0 observed maturity 开始。
+
 ## `harness-health`
 
 ### 目标

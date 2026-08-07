@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -86,4 +87,39 @@ test('every built-in pattern has the complete mandatory golden scenario set', ()
       assert.ok(scenario.expectedDecision.length > 0);
     }
   }
+});
+
+test('golden manifests execute every referenced safety and pattern scenario', () => {
+  const safety = readJson(MANIFEST_PATH);
+  const scenarios = readJson(PATTERN_SCENARIOS_PATH);
+  const safetyIds = safety.cases.map(({ id }) => id).sort();
+  assert.deepEqual(Object.keys(safety.verification.caseTests).sort(), safetyIds);
+  assert.deepEqual(Object.keys(scenarios.verification.kindTests).sort(), [...scenarios.requiredKinds].sort());
+  assert.equal(safety.verification.testFile, scenarios.verification.testFile);
+
+  const testFile = join(REPOSITORY, safety.verification.testFile);
+  const source = readFileSync(testFile, 'utf8');
+  const patterns = [
+    ...Object.values(safety.verification.caseTests),
+    ...Object.values(scenarios.verification.kindTests),
+  ];
+  for (const pattern of patterns) {
+    assert.match(source, new RegExp(pattern), `golden runner has no matching executable test: ${pattern}`);
+  }
+
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const result = spawnSync(process.execPath, [
+    '--test',
+    '--test-name-pattern',
+    [...new Set(patterns)].join('|'),
+    testFile,
+  ], {
+    cwd: REPOSITORY,
+    encoding: 'utf8',
+    timeout: 180000,
+    env,
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /# pass [1-9]\d*/, `golden runner executed no matching tests:\n${result.stdout}`);
 });

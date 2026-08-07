@@ -3,6 +3,33 @@
   "suiteId": "loop-safety-v1",
   "description": "Deterministic safety and recovery evaluations for the Loop Engineering template.",
   "requiredPassRate": 1,
+  "verification": {
+    "testFile": "tests/harness/loop-cli.test.mjs",
+    "caseTests": {
+      "schema-invalid-config-blocks": "loop schema rejects unknown keys",
+      "sync-drift-is-detected": "loop sync detects drift",
+      "kill-switch-blocks-prepare": "pause, missing resume evidence, and daily budget",
+      "daily-budget-blocks-next-run": "pause, missing resume evidence, and daily budget",
+      "no-op-finish-is-idempotent": "L1 no-op prepare/finish is idempotent",
+      "denylisted-path-blocks-write": "gate blocks deny paths",
+      "l1-write-is-always-blocked": "gate blocks deny paths",
+      "inbox-add-is-idempotent": "inbox stable IDs deduplicate",
+      "paused-loop-requires-evidenced-resume": "pause, missing resume evidence, and daily budget",
+      "promotion-rejects-l3": "promotion rejects L3",
+      "worktree-lock-conflict-blocks": "worktree locks reject overlapping owners",
+      "maker-verifier-must-be-independent": "L2 verify rejects self-verification",
+      "malformed-run-log-is-not-ignored": "metrics strictly reject malformed run logs",
+      "sensitive-fields-are-redacted": "metrics strictly reject malformed run logs",
+      "metrics-aggregate-verified-outcomes": "metrics parses optional pattern",
+      "install-preserves-target-loop-config": "install and upgrade preserve target-owned loop configuration",
+      "upgrade-conflict-preserves-target-loop-config": "install and upgrade preserve target-owned loop configuration",
+      "concurrent-prepare-single-slot": "concurrent prepares for one slot",
+      "concurrent-overlapping-lock-single-owner": "concurrent overlapping lock requests",
+      "install-starts-observed-l0": "init --project remains observed L0",
+      "structured-state-survives-runtime-writes": "STATE preserves and renders structured triage items",
+      "l2-proposal-requires-bound-receipts": "L2 proposal main chain"
+    }
+  },
   "cases": [
     {
       "id": "schema-invalid-config-blocks",
@@ -203,6 +230,60 @@
         "exitCode": 1,
         "targetConfigPreserved": true,
         "conflictReported": true
+      }
+    },
+    {
+      "id": "concurrent-prepare-single-slot",
+      "area": "isolation",
+      "severity": "P0",
+      "commandFamily": "loop run prepare",
+      "expected": {
+        "exitCode": 0,
+        "singleDurableRecord": true,
+        "noRuntimeMutation": false
+      }
+    },
+    {
+      "id": "concurrent-overlapping-lock-single-owner",
+      "area": "isolation",
+      "severity": "P0",
+      "commandFamily": "loop worktree lock",
+      "expected": {
+        "exitCode": 0,
+        "existingLockPreserved": true
+      }
+    },
+    {
+      "id": "install-starts-observed-l0",
+      "area": "distribution",
+      "severity": "P0",
+      "commandFamily": "install --merge / init --project / loop doctor",
+      "expected": {
+        "exitCode": 0,
+        "ok": true,
+        "observedLevel": "L0"
+      }
+    },
+    {
+      "id": "structured-state-survives-runtime-writes",
+      "area": "evidence",
+      "severity": "P0",
+      "commandFamily": "loop run finish / loop inbox add",
+      "expected": {
+        "exitCode": 0,
+        "ok": true,
+        "stateProjectionUnchanged": false
+      }
+    },
+    {
+      "id": "l2-proposal-requires-bound-receipts",
+      "area": "verification",
+      "severity": "P0",
+      "commandFamily": "loop gate maker/scope/proposal / loop run verify",
+      "expected": {
+        "exitCode": 0,
+        "ok": true,
+        "singleDurableRecord": true
       }
     }
   ]

@@ -495,6 +495,48 @@ test('hooks and CI route staged secrets and fast/full/ci profiles to the intende
   assert.doesNotMatch(workflow, /npm (?:ci|test)/);
 });
 
+test('manual Loop workflow dispatches the selected pattern through the execute runner', (t) => {
+  const root = withFixture(t);
+  const workflow = readFileSync(join(root, '.github', 'workflows', 'loop-manual.yml'), 'utf8');
+  assert.match(workflow, /pattern:\s*\n(?:\s{8,}.+\n)*?\s{8,}type:\s*choice\b/);
+  assert.match(workflow, /options:\s*\n(?:\s+-\s*.+\n)*?\s+-\s*harness-health\b/);
+  assert.match(workflow, /options:\s*\n(?:\s+-\s*.+\n)*?\s+-\s*daily-triage\b/);
+  assert.match(workflow, /env:\s*\n[\s\S]*?PATTERN:\s*\$\{\{\s*inputs\.pattern\s*\}\}/);
+  const lines = workflow.split(/\r?\n/);
+  const runScripts = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(/^(\s*)run:\s*(.*)$/);
+    if (!match) continue;
+    const indentation = match[1].length;
+    const script = [match[2]];
+    while (index + 1 < lines.length) {
+      const nextIndentation = lines[index + 1].match(/^\s*/)[0].length;
+      if (lines[index + 1].trim() && nextIndentation <= indentation) break;
+      script.push(lines[index + 1]);
+      index += 1;
+    }
+    runScripts.push(script.join('\n'));
+  }
+  assert.ok(runScripts.some((script) => /loop run execute\s+["']?\$\{?PATTERN\}?["']?/.test(script)));
+  for (const script of runScripts) assert.doesNotMatch(script, /\$\{\{\s*inputs\.pattern\s*\}\}/);
+  assert.doesNotMatch(workflow, /loop run prepare|loop run finish|--result/);
+  assert.doesNotMatch(workflow, /sync-agents --check|guard-secrets --tracked/);
+});
+
+test('Cursor shell guard returns the beforeShellExecution JSON protocol', (t) => {
+  const root = withFixture(t);
+  const allowed = cliFromStdin(root, JSON.stringify({ command: 'git status --short' }), 'guard');
+  assert.equal(allowed.status, 0, output(allowed));
+  assert.deepEqual(JSON.parse(allowed.stdout), { permission: 'allow' });
+
+  const blocked = cliFromStdin(root, JSON.stringify({ command: 'git push --force origin main' }), 'guard');
+  assert.equal(blocked.status, 2, output(blocked));
+  const decision = JSON.parse(blocked.stdout);
+  assert.equal(decision.permission, 'deny');
+  assert.match(decision.user_message, /force-push/i);
+  assert.match(decision.agent_message, /force-push/i);
+});
+
 test('task create enforces one active task and supports status, approval and legal phase transitions', (t) => {
   const root = withFixture(t);
   let result = cli(root, 'task', 'create', 'feature-one', '--title', 'Feature one', '--version', 'V2');

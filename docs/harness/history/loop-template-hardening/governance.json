@@ -1,0 +1,167 @@
+{
+  "schemaVersion": 2,
+  "taskId": "loop-template-hardening",
+  "title": "Loop Engineering 模板补强",
+  "phase": "completed",
+  "planVersion": "V1",
+  "approvedVersion": "V1",
+  "source": {
+    "kind": "human",
+    "loopId": null,
+    "runId": null,
+    "findingId": null
+  },
+  "approval": {
+    "status": "approved",
+    "approvedBy": "user",
+    "approvedAt": "2026-08-07T01:08:52.682Z",
+    "evidence": "User explicitly requested implementation of attached Loop Engineering 模板补强方案 V1."
+  },
+  "roles": [
+    {
+      "role": "parent",
+      "status": "completed",
+      "allowedPaths": [
+        "docs/plans/**",
+        "docs/team/STATUS.md"
+      ],
+      "forbiddenPaths": [
+        ".env",
+        ".env.*"
+      ],
+      "skill": ".agents/skills/team-orchestrator/SKILL.md",
+      "evidence": "方案 V1 全部五项待办已实施；完成跨角色编排、文档收口、全量验收与归档准备。"
+    },
+    {
+      "role": "backend_engineer",
+      "status": "completed",
+      "allowedPaths": [
+        "AGENTS.md",
+        ".cursor/hooks.json",
+        "harness.manifest.json",
+        "loop.config.json",
+        "STATE.md",
+        "loop-run-log.md",
+        "patterns/**",
+        "scripts/harness/**",
+        ".github/workflows/loop-manual.yml",
+        "docs/README.md",
+        "docs/loops/**"
+      ],
+      "forbiddenPaths": [
+        ".env",
+        ".env.*",
+        "apps/**",
+        "packages/**",
+        "tests/**",
+        "evals/**",
+        "docs/team/STATUS.md"
+      ],
+      "skill": ".agents/skills/backend-engineering/SKILL.md",
+      "evidence": "完成 Hook 协议、原子 lease/预算/路径门禁、L1 runner、L2 receipt/recover、registry V2 与运维文档。"
+    },
+    {
+      "role": "qa_engineer",
+      "status": "completed",
+      "allowedPaths": [
+        "tests/**",
+        "evals/**"
+      ],
+      "forbiddenPaths": [
+        ".env",
+        ".env.*",
+        "apps/**",
+        "packages/**",
+        "scripts/harness/**",
+        "docs/team/STATUS.md"
+      ],
+      "skill": ".agents/skills/quality-engineering/SKILL.md",
+      "evidence": "风险测试覆盖协议、安装 L0、状态保留、预算守恒、并发锁、L1/L2 主链、恢复与 Golden 清单；全量 97/97 通过。"
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "loop-engineering-reference",
+      "input": "D:/my-project/loop-engineering",
+      "roles": [
+        "backend_engineer",
+        "qa_engineer"
+      ],
+      "expectedOutput": "只读架构参考，不复制上游生态",
+      "fallback": "使用仓库内共享 Loop skills 与既有 V1 runtime"
+    }
+  ],
+  "requiredChecks": [
+    "harness-tests",
+    "loop-validate",
+    "loop-sync",
+    "loop-doctor",
+    "sync-agents",
+    "guard-secrets",
+    "doctor-template-strict",
+    "verify-ci",
+    "qa-acceptance"
+  ],
+  "policy": {
+    "decision": "allow",
+    "evidence": [
+      "用户明确要求实施已附加的 Loop Engineering 模板补强方案。"
+    ]
+  },
+  "isolation": {
+    "mode": "none",
+    "worktree": null,
+    "lockOwner": null
+  },
+  "acceptance": {
+    "results": [
+      {
+        "checkId": "harness-tests",
+        "status": "pass",
+        "evidence": "node scripts/harness/run-tests.mjs: 97 tests passed, 0 failed, 0 skipped."
+      },
+      {
+        "checkId": "loop-validate",
+        "status": "pass",
+        "evidence": "node scripts/harness/cli.mjs loop validate --strict --json: ok=true, errors=[]."
+      },
+      {
+        "checkId": "loop-sync",
+        "status": "pass",
+        "evidence": "node scripts/harness/cli.mjs loop sync --check --json: ok=true, errors=[]."
+      },
+      {
+        "checkId": "loop-doctor",
+        "status": "pass",
+        "evidence": "node scripts/harness/cli.mjs loop doctor --strict --json: ok=true; per-pattern configuredCapability and observedMaturity reported."
+      },
+      {
+        "checkId": "sync-agents",
+        "status": "pass",
+        "evidence": "node scripts/harness/cli.mjs sync-agents --check: PASS."
+      },
+      {
+        "checkId": "guard-secrets",
+        "status": "pass",
+        "evidence": "node scripts/harness/cli.mjs guard-secrets --tracked: PASS."
+      },
+      {
+        "checkId": "doctor-template-strict",
+        "status": "pass",
+        "evidence": "Pre-archive strict doctor passed all file, schema, link, generated-agent and manifest checks; only the intentionally active task/non-idle STATUS lifecycle checks remained and are cleared atomically by task complete. Post-archive strict doctor is required immediately after completion."
+      },
+      {
+        "checkId": "verify-ci",
+        "status": "pass",
+        "evidence": "node scripts/harness/cli.mjs verify --profile ci: PASS for the empty template profile."
+      },
+      {
+        "checkId": "qa-acceptance",
+        "status": "pass",
+        "evidence": "Full risk-based Harness/Loop suite passed 97/97, including manifest-driven Golden execution, concurrency, clean install, L1 runner, L2 receipt chain, recovery, registry drift and secret redaction."
+      }
+    ],
+    "remainingRisks": [],
+    "acceptedByUser": null
+  }
+}
