@@ -1,0 +1,7 @@
+[Script Info]
+ScriptType: v4.00+
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:44.00,0:01:40.00,Default,,0,0,0,,这个字幕超出了成片时长。
+Dialogue: 0,0:00:20.00,0:00:22.00,Default,,0,0,0,,顺序也是错误的。

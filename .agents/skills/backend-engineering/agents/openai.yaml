@@ -1,4 +1,0 @@
-interface:
-  display_name: "Backend Engineering"
-  short_description: "Build reliable APIs and domain behavior"
-  default_prompt: "Use $backend-engineering to implement and verify this backend change."

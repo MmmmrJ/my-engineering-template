@@ -1,4 +1,0 @@
-interface:
-  display_name: "Onboard Repository"
-  short_description: "Propose harness adaptation for a brownfield repo"
-  default_prompt: "Use $onboard-repository to scan this repo and draft an onboarding proposal for my approval."

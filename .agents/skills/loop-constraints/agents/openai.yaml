@@ -1,4 +1,0 @@
-interface:
-  display_name: "Loop Constraints"
-  short_description: "Enforce Loop boundaries and fail closed"
-  default_prompt: "Use $loop-constraints to load and enforce this repository's Loop rules before taking action."

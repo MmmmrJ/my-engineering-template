@@ -1,4 +1,0 @@
-interface:
-  display_name: "Audit Onboarding Proposal"
-  short_description: "Review harness onboarding proposals before apply"
-  default_prompt: "Use $audit-onboarding-proposal to review the onboarding proposal before any writes."

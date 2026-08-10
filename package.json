@@ -1,25 +1,40 @@
 {
-  "name": "harness-runtime",
-  "version": "4.0.0",
+  "name": "ai-cartoon-workflow",
+  "version": "1.0.0",
   "private": true,
-  "description": "Cross-platform, dependency-free runtime for the engineering harness.",
+  "description": "A review-gated, provider-neutral AI cartoon drama production workflow.",
   "type": "module",
+  "license": "Apache-2.0",
   "engines": {
-    "node": ">=20.19 <25"
+    "node": ">=22 <25"
+  },
+  "bin": {
+    "cartoon": "./dist/cli/index.js"
   },
   "scripts": {
-    "harness": "node scripts/harness/cli.mjs",
-    "harness:init": "node scripts/harness/cli.mjs init",
-    "harness:doctor": "node scripts/harness/cli.mjs doctor --strict",
-    "harness:verify": "node scripts/harness/cli.mjs verify --profile full",
-    "harness:sync-agents": "node scripts/harness/cli.mjs sync-agents --check",
-    "harness:guard-secrets": "node scripts/harness/cli.mjs guard-secrets --tracked",
-    "harness:validate-spec": "node scripts/harness/cli.mjs validate-spec",
-    "harness:validate-design": "node scripts/harness/cli.mjs validate-design",
-    "harness:validate-visual": "node scripts/harness/cli.mjs validate-visual",
-    "loop": "node scripts/harness/cli.mjs loop",
-    "loop:doctor": "node scripts/harness/cli.mjs loop doctor --strict",
-    "loop:validate": "node scripts/harness/cli.mjs loop validate --strict",
-    "test": "node scripts/harness/run-tests.mjs"
+    "cartoon": "tsx src/cli/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "doctor": "tsx src/cli/index.ts doctor",
+    "skills:sync": "node scripts/sync-skills.mjs --write",
+    "skills:check": "node scripts/sync-skills.mjs --check",
+    "validate:repository": "node scripts/validate-repository.mjs",
+    "check": "npm run skills:check && npm run validate:repository && npm run lint && npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.1",
+    "eslint": "10.8.1",
+    "tsx": "4.23.11",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.66.0",
+    "vitest": "4.1.10"
   }
 }

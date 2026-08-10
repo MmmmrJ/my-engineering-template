@@ -1,0 +1,31 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "h264",
+      "codec_type": "video",
+      "pix_fmt": "yuv420p",
+      "width": 1080,
+      "height": 1920,
+      "avg_frame_rate": "30/1",
+      "duration": "75.000000"
+    },
+    {
+      "index": 1,
+      "codec_name": "aac",
+      "codec_type": "audio",
+      "sample_rate": "48000",
+      "channels": 2,
+      "channel_layout": "stereo"
+    }
+  ],
+  "format": {
+    "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+    "duration": "75.000000",
+    "size": "12000000",
+    "tags": {
+      "comment": "AI-generated / 人工智能生成; ai_label_visible=true; subtitle_ass_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "description": "人工智能生成合成内容"
+    }
+  }
+}

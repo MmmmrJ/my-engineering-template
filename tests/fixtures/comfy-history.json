@@ -1,0 +1,20 @@
+{
+  "prompt-42": {
+    "status": {
+      "status_str": "success",
+      "completed": true,
+      "messages": []
+    },
+    "outputs": {
+      "9": {
+        "images": [
+          {
+            "filename": "frame 01.png",
+            "subfolder": "cartoon",
+            "type": "output"
+          }
+        ]
+      }
+    }
+  }
+}

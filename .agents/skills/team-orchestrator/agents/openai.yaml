@@ -1,7 +1,0 @@
-interface:
-  display_name: "Team Orchestrator"
-  short_description: "Plan, obtain approval, then orchestrate delivery"
-  default_prompt: "Use $team-orchestrator to design a versioned solution for my review, wait for my explicit approval, then implement and run final acceptance."
-
-policy:
-  allow_implicit_invocation: true

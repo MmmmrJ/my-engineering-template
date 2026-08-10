@@ -1,0 +1,39 @@
+name: AI Cartoon Workflow CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install FFmpeg (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-noto-cjk
+      - name: Install FFmpeg (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg -y --no-progress
+      - name: Install FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm run doctor -- --json
+      - name: Full default-profile media E2E (Linux)
+        if: runner.os == 'Linux'
+        env:
+          AI_CARTOON_FULL_MEDIA_E2E: "1"
+        run: npm test -- tests/e2e/default-profile.test.ts

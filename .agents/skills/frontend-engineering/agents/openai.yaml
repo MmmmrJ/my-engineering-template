@@ -1,4 +1,0 @@
-interface:
-  display_name: "Frontend Engineering"
-  short_description: "Build accessible contract-driven frontend features"
-  default_prompt: "Use $frontend-engineering to implement and verify this frontend change."

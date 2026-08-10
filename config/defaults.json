@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "locale": "zh-CN",
+  "format": {
+    "aspectRatio": "9:16",
+    "durationSeconds": { "target": 75, "min": 60, "max": 90 },
+    "shots": { "default": 10, "min": 8, "max": 12 },
+    "video": {
+      "width": 1080,
+      "height": 1920,
+      "fps": 30,
+      "videoCodec": "libx264",
+      "pixelFormat": "yuv420p",
+      "audioCodec": "aac",
+      "audioSampleRate": 48000
+    },
+    "subtitles": {
+      "language": "zh-CN",
+      "sidecar": "srt",
+      "burnIn": true
+    }
+  },
+  "execution": {
+    "mode": "serial",
+    "providerConcurrency": 1,
+    "voiceCloningEnabled": false
+  },
+  "outputRoot": "output"
+}

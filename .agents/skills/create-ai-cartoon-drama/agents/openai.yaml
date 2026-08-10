@@ -1,0 +1,5 @@
+interface:
+  display_name: "Create AI Cartoon Drama"
+  short_description: "Run a gated cartoon production workflow"
+  default_prompt: "Use $create-ai-cartoon-drama to turn my original IP and theme into a reviewed cartoon episode."
+

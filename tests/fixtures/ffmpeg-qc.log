@@ -1,0 +1,5 @@
+[blackdetect @ 0001] black_start:0 black_end:0.75 black_duration:0.75
+[silencedetect @ 0002] silence_start: 2
+[silencedetect @ 0002] silence_end: 4.5 | silence_duration: 2.5
+[freezedetect @ 0003] freeze_start: 8
+[freezedetect @ 0003] freeze_end: 9.25 | freeze_duration: 1.25

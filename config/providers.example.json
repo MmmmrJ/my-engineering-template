@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "providers": [
+    {
+      "id": "manual",
+      "displayName": "Manual Import",
+      "adapter": "manual",
+      "enabled": true,
+      "dataTransfer": "user-managed",
+      "requestDirectory": "output/_provider-health/manual/requests",
+      "resultDirectory": "output/_provider-health/manual/results"
+    },
+    {
+      "id": "minimax",
+      "displayName": "MiniMax",
+      "adapter": "minimax",
+      "enabled": false,
+      "baseUrl": "https://api.minimax.io",
+      "apiKeyEnv": "MINIMAX_API_KEY",
+      "dataTransfer": "external-cloud",
+      "termsUrl": "https://platform.minimax.io/protocol/terms-of-service",
+      "privacyUrl": "https://platform.minimax.io/protocol/privacy-policy",
+      "regions": ["global"],
+      "capabilities": [
+        "image.generate",
+        "image.edit",
+        "video.i2v",
+        "video.r2v",
+        "video.t2v",
+        "audio.tts"
+      ],
+      "models": [],
+      "routes": {
+        "video.t2v": {
+          "submitPath": "/v1/video_generation",
+          "pollPath": "/v1/query/video_generation?task_id={jobId}"
+        },
+        "video.i2v": {
+          "submitPath": "/v1/video_generation",
+          "pollPath": "/v1/query/video_generation?task_id={jobId}"
+        },
+        "video.r2v": {
+          "submitPath": "/v1/video_generation",
+          "pollPath": "/v1/query/video_generation?task_id={jobId}"
+        }
+      }
+    },
+    {
+      "id": "alibaba-wan",
+      "displayName": "Alibaba Wan",
+      "adapter": "alibaba-wan",
+      "enabled": false,
+      "baseUrl": "https://dashscope.aliyuncs.com/api/v1",
+      "apiKeyEnv": "DASHSCOPE_API_KEY",
+      "dataTransfer": "external-cloud",
+      "termsUrl": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-product-terms-of-service-v-3-8-0",
+      "privacyUrl": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy",
+      "region": "cn-beijing",
+      "models": [],
+      "routes": {
+        "image.generate": {
+          "submitPath": "/services/aigc/multimodal-generation/generation",
+          "pollPath": "/tasks/{jobId}"
+        },
+        "image.edit": {
+          "submitPath": "/services/aigc/multimodal-generation/generation",
+          "pollPath": "/tasks/{jobId}"
+        },
+        "video.t2v": {
+          "submitPath": "/services/aigc/video-generation/video-synthesis",
+          "pollPath": "/tasks/{jobId}"
+        },
+        "video.i2v": {
+          "submitPath": "/services/aigc/video-generation/video-synthesis",
+          "pollPath": "/tasks/{jobId}"
+        },
+        "video.r2v": {
+          "submitPath": "/services/aigc/video-generation/video-synthesis",
+          "pollPath": "/tasks/{jobId}"
+        }
+      }
+    },
+    {
+      "id": "comfyui",
+      "displayName": "ComfyUI",
+      "adapter": "comfyui",
+      "enabled": false,
+      "baseUrl": "http://127.0.0.1:8188",
+      "clientIdEnv": "COMFYUI_CLIENT_ID",
+      "dataTransfer": "local-or-configured-remote",
+      "workflowDirectory": "config/comfyui"
+    }
+  ]
+}

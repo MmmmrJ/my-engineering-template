@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "integrations": [
+    {
+      "id": "mediago",
+      "name": "MediaGo",
+      "repository": "https://github.com/mediago-dev/mediago-drama",
+      "commit": "f06641aa3fdbf5a8845b5c477b1e58809cc16e71",
+      "contentHash": "git-tree-sha1:5b274098b7458fbc4160316e47213e61680e3195",
+      "license": "Apache-2.0",
+      "relationship": "adapted-reference"
+    },
+    {
+      "id": "director-skill",
+      "name": "DirectorSKILL",
+      "repository": "https://github.com/wuwangzhang1216/DirectorSKILL",
+      "commit": "47db7d9b951a9f27f7b4b727a6ca0e01ab56f7c6",
+      "contentHash": "git-tree-sha1:4e8f94deb4ee385eabc8c34d1d1b71f289ffa021",
+      "license": "MIT",
+      "relationship": "adapted-reference"
+    },
+    {
+      "id": "hyperframes",
+      "name": "HyperFrames",
+      "repository": "https://github.com/heygen-com/hyperframes",
+      "commit": "c96b30c7174984e684620556ce871a285381ec60",
+      "contentHash": "git-tree-sha1:b8e65cda75e2eecfc3f4a9d329b98102bab59cf4",
+      "license": "Apache-2.0",
+      "relationship": "optional-external"
+    },
+    {
+      "id": "elevenlabs-skills",
+      "name": "ElevenLabs skills",
+      "repository": "https://github.com/elevenlabs/skills",
+      "commit": "a3bbe2104f3c9828bfa4014149f755753842a1d0",
+      "contentHash": "git-tree-sha1:dcae2b79c9728ea0a20f2a1c4a7b43cc8ac1faa4",
+      "license": "MIT",
+      "relationship": "optional-external"
+    }
+  ]
+}

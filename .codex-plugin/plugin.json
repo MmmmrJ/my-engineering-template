@@ -1,0 +1,26 @@
+{
+  "name": "ai-cartoon-workflow",
+  "version": "1.0.0",
+  "description": "Create an AI cartoon drama through a resumable workflow with mandatory user review gates.",
+  "author": {
+    "name": "AI Cartoon Workflow Template Contributors"
+  },
+  "license": "Apache-2.0",
+  "keywords": ["ai-cartoon", "video", "workflow", "storyboard", "mcp"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "AI Cartoon Workflow",
+    "shortDescription": "Produce reviewed AI cartoon dramas from an IP and theme.",
+    "longDescription": "A serial, resumable production workflow for concept, script, storyboard, assets, keyframes, video, audio, editing, subtitles, quality control, and final approval.",
+    "developerName": "AI Cartoon Workflow Template Contributors",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Create a Chinese vertical AI cartoon drama from my original IP and theme.",
+      "Resume my AI cartoon task and show the next review package.",
+      "Check which media providers are configured before generation."
+    ],
+    "brandColor": "#6D4AFF"
+  }
+}

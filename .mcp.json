@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ai-cartoon-workflow": {
+      "command": "node",
+      "args": ["dist/mcp/server.js"]
+    }
+  }
+}

@@ -1,0 +1,9 @@
+[blackdetect @ v0] black_start:0 black_end:2 black_duration:2
+[silencedetect @ a0] silence_start: 5
+[silencedetect @ a0] silence_end: 15 | silence_duration: 10
+[freezedetect @ v0] freeze_start: 20
+[freezedetect @ v0] freeze_end: 25 | freeze_duration: 5
+[Parsed_ebur128_0 @ a0] I: -22.0 LUFS
+[Parsed_ebur128_0 @ a0] Peak: 0.5 dBFS
+[Parsed_astats_0 @ a0] Peak level dB: 0.2
+[Parsed_astats_0 @ a0] Number of clipped samples: 24

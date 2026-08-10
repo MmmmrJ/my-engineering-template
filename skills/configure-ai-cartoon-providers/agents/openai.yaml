@@ -1,0 +1,5 @@
+interface:
+  display_name: "Configure Cartoon Providers"
+  short_description: "Configure and verify durable media providers"
+  default_prompt: "Use $configure-ai-cartoon-providers to configure and check provider profiles for my cartoon task."
+
