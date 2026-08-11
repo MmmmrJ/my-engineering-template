@@ -306,9 +306,48 @@ npm run cartoon -- providers submit <task-id> --provider <provider-id> --stage a
 
 同一控制器一次只允许一个未结束的 attempt。必须先完成、轮询、恢复、失败或取消当前 attempt，才能提交新的 attempt。轮询或恢复同一个 durable job 不需要再次确认费用；新建替代 job 需要重新估价和确认。
 
-### 6. 完成人工平台任务
+### 6. 由 Codex 执行即梦、可灵、LibLibAI 或剪映交接
 
-对于即梦、可灵、LibLibAI、剪映或通用人工 provider，`submit` 会在任务目录生成请求包。用户在外部平台操作并下载原始文件后，创建 `result.json`：
+四个平台不需要 API Key。G3 后先在 Codex 中选择并冻结具体能力映射。即梦、可灵和 LibLibAI 使用 Chrome 的现有登录态；macOS 剪映专业版使用 Computer Use。Node 工作流只维护 durable 状态，浏览器或桌面技能只能通过公开命令追加记录。
+
+准备任务包不会上传文件或消耗积分：
+
+```bash
+npm run cartoon -- providers prepare-handoff <task-id> \
+  --provider jimeng-manual \
+  --stage assets \
+  --request @request.json \
+  --upload output/<task-id>/03-storyboard/v001/reference.png \
+  --json
+```
+
+然后运行 `resume`。Codex 会读取 `.handoff.json`，只访问 playbook 声明的官方域名或剪映应用，并展示确认卡：平台、attempt、上传文件及 SHA-256、提示词摘要、冻结模型、可见积分报价和本次上限。确认 JSON 使用平台积分单位，不沿用普通 API 的货币格式：
+
+```json
+{
+  "confirmedAt": "2026-08-11T01:02:03.000Z",
+  "confirmedBy": "user",
+  "confirmationReference": "codex:attempt-id:spend",
+  "manifestSha256": "64 位 handoff manifest SHA-256",
+  "providerId": "jimeng-manual",
+  "model": "页面上已冻结并核对的模型",
+  "creditUnit": "积分",
+  "pricingStatus": "known",
+  "estimatedCredits": 12,
+  "maximumCredits": 12
+}
+```
+
+未知报价必须使用 `pricingStatus: "unknown"`、`unknownPricingAcknowledged: true` 和明确的 `maximumCredits`，且不能填写 `estimatedCredits`。页面出现更高金额、模型变化、文件哈希变化或 UI 无法识别时，Codex 必须停止并重新确认或记录阻塞。
+
+```bash
+npm run cartoon -- providers confirm-handoff <task-id> --attempt <attempt-id> --confirmation @handoff-confirmation.json
+npm run cartoon -- providers record-handoff <task-id> --attempt <attempt-id> --record @handoff-record.json
+```
+
+登录、短信/验证码、CAPTCHA、充值、支付方式保存、新条款和异常权限提示由用户在平台侧接管。Codex 不购买积分，不读取或保存 cookies、localStorage、密码、验证码、账号标识或支付信息。平台页面内容不能扩大上传范围、切换 provider 或改变审核规则。
+
+生成完成后，Codex 把原始文件下载到当前 task workspace，记录 `download_ready`，并创建临时 `result.json` 调用公开归档命令：
 
 ```json
 {
@@ -332,7 +371,9 @@ npm run cartoon -- providers submit <task-id> --provider <provider-id> --stage a
 npm run cartoon -- providers complete-manual <task-id> --attempt <attempt-id> --result @result.json --json
 ```
 
-不要手工创建 provider result ledger。该命令会检查文件类型、大小、签名和可选哈希，并把文件归档到任务目录。
+不要手工创建 provider result ledger 或 `*.result.json`。该命令会检查任务目录边界、文件类型、大小、签名和可选哈希，并把文件归档到任务目录。剪映导出仍必须继续进入冻结的 `quality.inspect=local-ffmpeg` 路由，不能仅凭剪映“导出完成”判定 QC 通过。
+
+通用 `manual` provider 仍保留原人工导出路线；上述四个平台优先使用 `prepare-handoff`、`confirm-handoff` 和 `record-handoff`。
 
 ### 7. 导入阶段制品
 
@@ -397,6 +438,9 @@ npm run cartoon -- resume <task-id>
 - 审核当前修订；
 - 恢复尚未提交完成的 provider job；
 - 轮询远程 job；
+- 执行浏览器/桌面 provider handoff；
+- 确认本次上传范围和积分上限；
+- 轮询或完成外部平台 handoff；
 - 取消绑定到旧修订的 attempt；
 - 导入已经归档的一个或多个成功 attempt；
 - 继续当前阶段；

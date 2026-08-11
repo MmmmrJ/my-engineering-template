@@ -12,12 +12,18 @@ import {
 } from "../contracts/index.js";
 import type {
   AttemptContext,
+  HandoffRecordInput,
+  HandoffSpendConfirmation,
   JsonObject,
   JsonValue,
   ManualCompletionInput,
   PaidSubmitConfirmation,
   ProviderEstimateRequest,
   ProviderSubmitRequest,
+} from "../providers/index.js";
+import {
+  MANUAL_PLATFORM_ADAPTERS,
+  PROVIDER_HANDOFF_BLOCK_REASONS,
 } from "../providers/index.js";
 import type { WorkflowService } from "../workflow/index.js";
 import { WorkflowError } from "../workflow/index.js";
@@ -169,6 +175,124 @@ export const manualCompletionMcpSchema = z
   })
   .strict();
 
+const handoffSpendConfirmationBase = {
+  confirmedAt: z.iso.datetime({ offset: true }),
+  confirmedBy: z.literal("user"),
+  confirmationReference: z
+    .string()
+    .regex(/^[a-zA-Z0-9][a-zA-Z0-9._:/#-]{0,255}$/),
+  manifestSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  providerId: z.enum(MANUAL_PLATFORM_ADAPTERS),
+  model: z.string().trim().min(1).max(128).optional(),
+  creditUnit: z.string().trim().min(1).max(32),
+  maximumCredits: z.number().finite().nonnegative(),
+};
+
+export const handoffSpendConfirmationSchema: z.ZodType<HandoffSpendConfirmation> = z
+  .discriminatedUnion("pricingStatus", [
+    z
+      .object({
+        ...handoffSpendConfirmationBase,
+        pricingStatus: z.literal("known"),
+        estimatedCredits: z.number().finite().nonnegative(),
+      })
+      .strict(),
+    z
+      .object({
+        ...handoffSpendConfirmationBase,
+        pricingStatus: z.literal("unknown"),
+        unknownPricingAcknowledged: z.literal(true),
+      })
+      .strict(),
+  ])
+  .superRefine((confirmation, context) => {
+    if (
+      confirmation.pricingStatus === "known" &&
+      confirmation.estimatedCredits > confirmation.maximumCredits
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["estimatedCredits"],
+        message: "estimatedCredits exceeds the approved maximumCredits",
+      });
+    }
+  });
+
+const handoffReceiptSchema = z
+  .object({
+    externalTaskId: z.string().trim().min(1).max(128).optional(),
+    observedModel: z.string().trim().min(1).max(128).optional(),
+    observedCredits: z.number().finite().nonnegative().optional(),
+    creditUnit: z.string().trim().min(1).max(32).optional(),
+    generationUuid: z.string().trim().min(1).max(128).optional(),
+    seed: z.union([z.string().trim().min(1).max(128), z.number().finite()]).optional(),
+    workflowId: z.string().trim().min(1).max(128).optional(),
+    workflowVersion: z.string().trim().min(1).max(128).optional(),
+    outputCount: z.number().int().nonnegative().optional(),
+    evidence: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict();
+
+export const handoffRecordSchema: z.ZodType<HandoffRecordInput> = z
+  .object({
+    state: z.enum([
+      "awaiting_login",
+      "awaiting_confirmation",
+      "submitted",
+      "running",
+      "download_ready",
+      "blocked",
+      "cancelled",
+    ]),
+    receipt: handoffReceiptSchema.optional(),
+    blockedReason: z.enum(PROVIDER_HANDOFF_BLOCK_REASONS).optional(),
+    failureReason: z.string().trim().min(1).max(500).optional(),
+  })
+  .strict()
+  .superRefine((record, context) => {
+    if (record.state === "blocked" && (!record.blockedReason || !record.failureReason)) {
+      context.addIssue({
+        code: "custom",
+        message: "blocked handoff requires blockedReason and failureReason",
+      });
+    }
+    if (
+      record.state !== "blocked" &&
+      (record.blockedReason !== undefined || record.failureReason !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "blockedReason and failureReason are only valid for blocked handoffs",
+      });
+    }
+  });
+
+export const providerPrepareHandoffMcpSchema = z
+  .object({
+    taskId: z.string().trim().min(1),
+    providerId: z.enum(MANUAL_PLATFORM_ADAPTERS),
+    stage: z.enum(WORKFLOW_STAGES),
+    request: providerSubmitRequestSchema,
+    uploadPaths: z.array(z.string().trim().min(1)).default([]),
+  })
+  .strict();
+
+export const providerConfirmHandoffMcpSchema = z
+  .object({
+    taskId: z.string().trim().min(1),
+    attemptId: z.string().uuid(),
+    confirmation: handoffSpendConfirmationSchema,
+  })
+  .strict();
+
+export const providerRecordHandoffMcpSchema = z
+  .object({
+    taskId: z.string().trim().min(1),
+    attemptId: z.string().uuid(),
+    record: handoffRecordSchema,
+  })
+  .strict();
+
 export async function readJsonFile<T>(
   reference: string | undefined,
   cwd: string,
@@ -201,6 +325,41 @@ export async function readJsonFile<T>(
 export interface EligibleProviderSubmit {
   readonly request: ProviderSubmitRequest;
   readonly context: AttemptContext;
+}
+
+export interface EligibleProviderHandoff {
+  readonly request: ProviderSubmitRequest;
+  readonly context: {
+    readonly stage: WorkflowStage;
+    readonly stageRevision: number;
+  };
+}
+
+export async function requireProviderHandoffEligibility(
+  workflow: WorkflowService,
+  taskId: string,
+  providerId: string,
+  stage: WorkflowStage,
+  request: ProviderSubmitRequest,
+): Promise<EligibleProviderHandoff> {
+  assertNoDirectVoiceCloneIntent(request);
+  const state = await workflow.getState(taskId);
+  const binding = requireFrozenProviderBinding(state, providerId, request);
+  if (binding.mode !== "manual" || !MANUAL_PLATFORM_ADAPTERS.includes(providerId as never)) {
+    throw new WorkflowError(
+      "INVALID_TRANSITION",
+      `Provider ${providerId} is not a frozen browser/desktop handoff route.`,
+    );
+  }
+  requireActionableStage(state, stage, request.capability);
+  await workflow.assertProviderSubmissionAllowed(taskId, stage);
+  return {
+    request: binding.request,
+    context: {
+      stage,
+      stageRevision: state.stages[stage].revisions.length + 1,
+    },
+  };
 }
 
 export async function requireProviderSubmitEligibility(

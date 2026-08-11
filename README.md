@@ -75,6 +75,9 @@ For an API or task-scoped manual request, keep prompts in a JSON file and use th
 ```powershell
 npm run cartoon -- providers estimate <task-id> --provider <id> --request @request.json --json
 npm run cartoon -- providers submit <task-id> --provider <id> --stage <stage-id> --request @request.json --confirmation @confirmation.json --json
+npm run cartoon -- providers prepare-handoff <task-id> --provider <platform-manual-id> --stage <stage-id> --request @request.json [--upload <task-file> ...] --json
+npm run cartoon -- providers confirm-handoff <task-id> --attempt <attempt-id> --confirmation @handoff-confirmation.json --json
+npm run cartoon -- providers record-handoff <task-id> --attempt <attempt-id> --record @handoff-record.json --json
 npm run cartoon -- providers complete-manual <task-id> --attempt <attempt-id> --result @result.json --json
 npm run cartoon -- providers jobs <task-id> --json
 npm run cartoon -- providers poll <task-id> --attempt <attempt-id> --json
@@ -110,6 +113,8 @@ Every new `submit` obtains a fresh provider estimate and binds it to one explici
 ```
 
 Known pricing must exactly match the mechanically calculated estimate. Unknown pricing must omit `estimatedCost`; task-scoped Manual Import uses the unknown form with `maximumCost: 0`. Polling or resuming the same attempt does not request confirmation again.
+
+The four China-platform/macOS routes use a separate UI handoff lifecycle. `prepare-handoff` creates a task-local manifest without uploading or consuming credits. Codex then uses Chrome for 即梦、可灵 and LibLibAI, or Computer Use for macOS 剪映专业版. Before upload and generation, `confirm-handoff` binds the exact manifest hash, platform/model, credit unit, visible quote (or acknowledged maximum), and upload hashes to this attempt. Login, CAPTCHA, recharge, payment details, new terms, and unexpected permissions remain user handoffs. See the [Chinese guide](README.zh-CN.md#6-由-codex-执行即梦可灵liblibai-或剪映交接) for the complete operator flow.
 
 Successful provider outputs are not stage artifacts yet. Temporary URLs are downloaded, MIME/size/hash checked, and archived under `output/<task-id>/provider-downloads/`; manual request/result packages live under `output/<task-id>/manual/`. Use `providers complete-manual` for user-exported platform files instead of writing result JSON by hand. Then bind the complete archived output set to its successful durable attempt so it becomes reviewable and recoverable:
 

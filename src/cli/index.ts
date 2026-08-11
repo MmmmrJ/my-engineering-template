@@ -47,12 +47,15 @@ import {
 } from "./args.js";
 import { readImportMetadata } from "./metadata.js";
 import {
+  handoffRecordSchema,
+  handoffSpendConfirmationSchema,
   manualCompletionInputSchema,
   paidSubmitConfirmationSchema,
   providerEstimateRequestSchema,
   providerSubmitRequestSchema,
   readJsonFile,
   requireProviderResumeEligibility,
+  requireProviderHandoffEligibility,
   requireProviderSubmitEligibility,
 } from "./provider-execution.js";
 
@@ -403,7 +406,7 @@ async function runProviders(
   if (!subcommand) {
     throw new WorkflowError(
       "USAGE",
-      "providers requires list, check, select, estimate, submit, complete-manual, import-output, resume-job, poll, cancel, or jobs.",
+      "providers requires list, check, select, estimate, submit, prepare-handoff, confirm-handoff, record-handoff, complete-manual, import-output, resume-job, poll, cancel, or jobs.",
     );
   }
   const args = parseArguments(argv.slice(1));
@@ -531,6 +534,94 @@ async function runProviders(
       flag(args, "json"),
       result,
       `Submitted ${result.attempt.attemptId}; provider job ${result.job.remoteJobId} is ${result.job.state}.`,
+      stdout,
+    );
+    return 0;
+  }
+  if (subcommand === "prepare-handoff") {
+    assertAllowedOptions(args, ["provider", "stage", "request", "upload", "json"]);
+    assertPositionalCount(args, 1);
+    const task = positional(args, 0, "task-id") as string;
+    const providerId = option(args, "provider", { required: true }) as string;
+    const stage = requireStage(option(args, "stage", { required: true }) as string);
+    const request = await readJsonFile(
+      option(args, "request"),
+      cwd,
+      providerSubmitRequestSchema,
+      "provider request",
+    );
+    const workflowService = await getWorkflow();
+    const eligible = await requireProviderHandoffEligibility(
+      workflowService,
+      task,
+      providerId,
+      stage,
+      request,
+    );
+    const manager = new ProviderExecutionManager(
+      await getProviderRegistry(),
+      workflowService.resolveTaskDirectory(task),
+    );
+    const result = await manager.prepareHandoff(providerId, eligible.request, {
+      ...eligible.context,
+      uploadPaths: options(args, "upload").map((path) => resolve(cwd, path)),
+    });
+    writeResult(
+      flag(args, "json"),
+      result,
+      `Prepared provider handoff ${result.attempt.attemptId}: ${result.attempt.handoff?.manifestPath ?? "manifest unavailable"}. No platform credits were consumed.`,
+      stdout,
+    );
+    return 0;
+  }
+  if (subcommand === "confirm-handoff") {
+    assertAllowedOptions(args, ["attempt", "confirmation", "json"]);
+    assertPositionalCount(args, 1);
+    const task = positional(args, 0, "task-id") as string;
+    const attemptId = option(args, "attempt", { required: true }) as string;
+    const confirmation = await readJsonFile(
+      option(args, "confirmation"),
+      cwd,
+      handoffSpendConfirmationSchema,
+      "handoff spend confirmation",
+    );
+    const workflowService = await getWorkflow();
+    await workflowService.getState(task);
+    const manager = new ProviderExecutionManager(
+      await getProviderRegistry(),
+      workflowService.resolveTaskDirectory(task),
+    );
+    const attempt = await manager.confirmHandoff(attemptId, confirmation);
+    writeResult(
+      flag(args, "json"),
+      attempt,
+      `Confirmed upload scope and ${confirmation.maximumCredits} ${confirmation.creditUnit} maximum for handoff ${attemptId}.`,
+      stdout,
+    );
+    return 0;
+  }
+  if (subcommand === "record-handoff") {
+    assertAllowedOptions(args, ["attempt", "record", "json"]);
+    assertPositionalCount(args, 1);
+    const task = positional(args, 0, "task-id") as string;
+    const attemptId = option(args, "attempt", { required: true }) as string;
+    const record = await readJsonFile(
+      option(args, "record"),
+      cwd,
+      handoffRecordSchema,
+      "handoff record",
+    );
+    const workflowService = await getWorkflow();
+    await workflowService.getState(task);
+    const manager = new ProviderExecutionManager(
+      await getProviderRegistry(),
+      workflowService.resolveTaskDirectory(task),
+    );
+    const attempt = await manager.recordHandoff(attemptId, record);
+    writeResult(
+      flag(args, "json"),
+      attempt,
+      `Recorded provider handoff ${attemptId}: ${attempt.handoff?.state ?? record.state}.`,
       stdout,
     );
     return 0;
@@ -962,6 +1053,14 @@ function formatResume(result: Awaited<ReturnType<WorkflowService["resume"]>>): s
       return `Provider selection required: ${result.action.missing.join(", ")}.`;
     case "replace-stale":
       return `Replace stale ${result.action.stage}; invalidated by ${result.action.target.kind}.`;
+    case "execute-provider-handoff":
+      return `Execute provider handoff ${result.action.attemptId} with ${result.action.providerId} from ${result.action.manifestPath}.`;
+    case "confirm-provider-spend":
+      return `Confirm the upload scope and credit limit for provider handoff ${result.action.attemptId}.`;
+    case "poll-provider-handoff":
+      return `Inspect and record external progress for provider handoff ${result.action.attemptId}.`;
+    case "complete-provider-handoff":
+      return `Archive downloaded outputs for provider handoff ${result.action.attemptId} with complete-manual.`;
     case "resume-provider-job":
       return `Resume provider attempt ${result.action.attemptId} for ${result.action.stage}.`;
     case "poll-provider-job":
@@ -1006,6 +1105,9 @@ Usage:
   cartoon providers select <task-id> [--provider <id> --mode api|mcp|manual] [--binding <capability=provider:mode>]
   cartoon providers estimate <task-id> --provider <id> --request @request.json [--json]
   cartoon providers submit <task-id> --provider <id> --stage <stage> --request @request.json --confirmation @confirmation.json [--json]
+  cartoon providers prepare-handoff <task-id> --provider <jimeng-manual|kling-manual|liblib-manual|jianying-manual> --stage <stage> --request @request.json [--upload <task-file> ...] [--json]
+  cartoon providers confirm-handoff <task-id> --attempt <attempt-id> --confirmation @handoff-confirmation.json [--json]
+  cartoon providers record-handoff <task-id> --attempt <attempt-id> --record @handoff-record.json [--json]
   cartoon providers complete-manual <task-id> --attempt <attempt-id> --result @result.json [--json]
   cartoon providers import-output <task-id> --attempt <attempt-id> [--attempt <attempt-id> ...] --contract @stage-contract.json --metadata @metadata.json [--json]
   cartoon providers resume-job <task-id> --attempt <attempt-id> --request @request.json [--json]

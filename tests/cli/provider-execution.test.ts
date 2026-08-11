@@ -650,6 +650,155 @@ describe("provider execution CLI", () => {
     });
   });
 
+  it("prepares, confirms, records, and resumes a Codex-controlled platform handoff", async () => {
+    registry = new ProviderRegistry([
+      new ManualProviderAdapter({
+        id: "jimeng-manual",
+        displayName: "即梦 AI",
+        adapter: "jimeng-manual",
+        requestDirectory: join(root, "health", "requests"),
+        resultDirectory: join(root, "health", "results"),
+        capabilities: REQUIRED_PROVIDER_CAPABILITIES,
+      }),
+    ]);
+    let sequence = 200;
+    workflow = new WorkflowService({
+      legacyUnstructuredImportsForTests: true,
+      defaultRoot: root,
+      providerFacade: new ProviderRegistryFacade(registry),
+      clock: () => new Date("2026-08-10T01:02:03.000Z"),
+      idGenerator: (prefix) => `${prefix}_${++sequence}`,
+    });
+    taskId = await prepareMediaTask(workflow, "jimeng-manual", "manual");
+    const requestPath = await writeRequest(root);
+    const uploadPath = join(workflow.resolveTaskDirectory(taskId), "handoff-reference.png");
+    await writeFile(
+      uploadPath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    expect(
+      await runCli(
+        [
+          "providers",
+          "prepare-handoff",
+          taskId,
+          "--provider",
+          "jimeng-manual",
+          "--stage",
+          "assets",
+          "--request",
+          requestPath,
+          "--upload",
+          uploadPath,
+          "--json",
+        ],
+        dependencies(),
+      ),
+    ).toBe(0);
+    const prepared = JSON.parse(stdout) as {
+      attempt: {
+        attemptId: string;
+        handoff: { manifestSha256: string; manifestPath: string };
+      };
+    };
+    expect((await workflow.resume(taskId)).action).toMatchObject({
+      type: "execute-provider-handoff",
+      attemptId: prepared.attempt.attemptId,
+    });
+
+    const awaitingPath = join(root, "handoff-awaiting.json");
+    await writeFile(awaitingPath, JSON.stringify({ state: "awaiting_confirmation" }));
+    stdout = "";
+    expect(
+      await runCli(
+        [
+          "providers",
+          "record-handoff",
+          taskId,
+          "--attempt",
+          prepared.attempt.attemptId,
+          "--record",
+          awaitingPath,
+          "--json",
+        ],
+        dependencies(),
+      ),
+    ).toBe(0);
+    expect((await workflow.resume(taskId)).action).toMatchObject({
+      type: "confirm-provider-spend",
+      attemptId: prepared.attempt.attemptId,
+    });
+
+    const confirmationPath = join(root, "handoff-spend.json");
+    await writeFile(
+      confirmationPath,
+      JSON.stringify({
+        confirmedAt: "2026-08-10T01:03:00.000Z",
+        confirmedBy: "user",
+        confirmationReference: `codex:${prepared.attempt.attemptId}:spend`,
+        manifestSha256: prepared.attempt.handoff.manifestSha256,
+        providerId: "jimeng-manual",
+        creditUnit: "积分",
+        pricingStatus: "known",
+        estimatedCredits: 5,
+        maximumCredits: 5,
+      }),
+    );
+    stdout = "";
+    expect(
+      await runCli(
+        [
+          "providers",
+          "confirm-handoff",
+          taskId,
+          "--attempt",
+          prepared.attempt.attemptId,
+          "--confirmation",
+          confirmationPath,
+          "--json",
+        ],
+        dependencies(),
+      ),
+    ).toBe(0);
+
+    const submittedPath = join(root, "handoff-submitted.json");
+    await writeFile(
+      submittedPath,
+      JSON.stringify({
+        state: "submitted",
+        receipt: {
+          externalTaskId: "jimeng-task-5",
+          observedCredits: 5,
+          creditUnit: "积分",
+        },
+      }),
+    );
+    stdout = "";
+    expect(
+      await runCli(
+        [
+          "providers",
+          "record-handoff",
+          taskId,
+          "--attempt",
+          prepared.attempt.attemptId,
+          "--record",
+          submittedPath,
+          "--json",
+        ],
+        dependencies(),
+      ),
+    ).toBe(0);
+    expect((await workflow.resume(taskId)).action).toMatchObject({
+      type: "poll-provider-handoff",
+      attemptId: prepared.attempt.attemptId,
+    });
+  });
+
   it("rejects recursive clone intent before the adapter is called without rejecting catalog voiceId", async () => {
     expect(
       providerSubmitRequestSchema.safeParse({

@@ -12,7 +12,7 @@ Configure durable capability routes without persisting secrets. Read [providers.
 1. Run `npm run cartoon -- doctor` and `npm run cartoon -- providers list`.
 2. Run `npm ci`, then confirm `doctor` finds `ffmpeg` and `ffprobe`. It prefers explicit config, environment overrides, optional npm-managed binaries, then system `PATH`; keep `local-ffmpeg` for deterministic contact sheets, timeline assembly, and final QC.
 3. Copy `config/providers.example.json` to the ignored `config/providers.local.json` when local overrides are needed.
-4. Select local execution, `api`, `mcp`, or `manual` for each capability. Prefer task-scoped local execution for deterministic media work, then API, MCP, and manual based on recoverability. Use `jimeng-manual`, `kling-manual`, `liblib-manual`, or `jianying-manual` for tailored external-app packages; keep `comfyui` as the advanced versioned local-workflow entry.
+4. Select local execution, `api`, `mcp`, or `manual` for each capability. Prefer task-scoped local execution for deterministic media work, then API, MCP, and manual based on recoverability. Use `jimeng-manual`, `kling-manual`, `liblib-manual`, or `jianying-manual` for durable Codex UI handoffs executed by `$execute-cartoon-platform-handoff`; keep `comfyui` as the advanced versioned local-workflow entry.
 5. Store only environment-variable names such as `MINIMAX_API_KEY`, `DASHSCOPE_API_KEY`, or optional `COMFYUI_CLIENT_ID` in JSON. Set secret values in the process environment or an external secret manager.
 6. Keep voice cloning disabled by default. Do not activate a clone-capable profile unless the task has separate consent evidence and explicit user confirmation.
 7. Run `npm run cartoon -- providers check`; resolve every required capability failure.

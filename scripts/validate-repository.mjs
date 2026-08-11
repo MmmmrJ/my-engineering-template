@@ -7,8 +7,10 @@ const required = [
   ".mcp.json",
   ".agents/skills/create-ai-cartoon-drama/SKILL.md",
   ".agents/skills/configure-ai-cartoon-providers/SKILL.md",
+  ".agents/skills/execute-cartoon-platform-handoff/SKILL.md",
   "skills/create-ai-cartoon-drama/SKILL.md",
   "skills/configure-ai-cartoon-providers/SKILL.md",
+  "skills/execute-cartoon-platform-handoff/SKILL.md",
   "config/defaults.json",
   "config/providers.example.json",
   "docs/FFMPEG_DEPLOYMENT.md",
@@ -40,7 +42,11 @@ if (plugin.skills !== "./skills/" || plugin.mcpServers !== "./.mcp.json") {
   throw new Error("Plugin manifest must point at the repository skills and MCP config.");
 }
 
-for (const name of ["create-ai-cartoon-drama", "configure-ai-cartoon-providers"]) {
+for (const name of [
+  "create-ai-cartoon-drama",
+  "configure-ai-cartoon-providers",
+  "execute-cartoon-platform-handoff",
+]) {
   const text = await readFile(
     resolve(root, `.agents/skills/${name}/SKILL.md`),
     "utf8",

@@ -23,12 +23,16 @@ import { WorkflowService } from "../workflow/index.js";
 import { WorkflowError } from "../workflow/index.js";
 import {
   manualCompletionMcpSchema,
+  providerConfirmHandoffMcpSchema,
   providerAttemptMcpSchema,
   providerEstimateMcpSchema,
   providerJobsMcpSchema,
+  providerPrepareHandoffMcpSchema,
+  providerRecordHandoffMcpSchema,
   providerResumeMcpSchema,
   providerSubmitMcpSchema,
   requireProviderResumeEligibility,
+  requireProviderHandoffEligibility,
   requireProviderSubmitEligibility,
 } from "../cli/provider-execution.js";
 
@@ -418,6 +422,70 @@ export async function createCartoonMcpServer(
             eligible.request,
             eligible.context,
           ),
+        ),
+      );
+    },
+  );
+
+  server.registerTool(
+    "cartoon_prepare_provider_handoff",
+    {
+      description:
+        "Prepare a hash-bound task package for a frozen 即梦、可灵、LibLibAI or macOS 剪映 manual route without uploading files or consuming platform credits.",
+      inputSchema: providerPrepareHandoffMcpSchema,
+    },
+    async ({ taskId, providerId, stage, request, uploadPaths }) => {
+      const eligible = await requireProviderHandoffEligibility(
+        workflow,
+        taskId,
+        providerId,
+        stage,
+        request,
+      );
+      return jsonResult(
+        await safeProviderCall(() =>
+          providerManager(providers, workflow, taskId).prepareHandoff(
+            providerId,
+            eligible.request,
+            { ...eligible.context, uploadPaths },
+          ),
+        ),
+      );
+    },
+  );
+
+  server.registerTool(
+    "cartoon_confirm_provider_handoff",
+    {
+      description:
+        "Persist one attempt-specific Codex confirmation for the exact platform, manifest hash, model, upload list, credit unit, quote, and maximum credit spend.",
+      inputSchema: providerConfirmHandoffMcpSchema,
+    },
+    async ({ taskId, attemptId, confirmation }) => {
+      await workflow.getState(taskId);
+      return jsonResult(
+        await safeProviderCall(() =>
+          providerManager(providers, workflow, taskId).confirmHandoff(
+            attemptId,
+            confirmation,
+          ),
+        ),
+      );
+    },
+  );
+
+  server.registerTool(
+    "cartoon_record_provider_handoff",
+    {
+      description:
+        "Append a sanitized browser/desktop handoff observation such as login required, submitted, running, download ready, blocked, or cancelled.",
+      inputSchema: providerRecordHandoffMcpSchema,
+    },
+    async ({ taskId, attemptId, record }) => {
+      await workflow.getState(taskId);
+      return jsonResult(
+        await safeProviderCall(() =>
+          providerManager(providers, workflow, taskId).recordHandoff(attemptId, record),
         ),
       );
     },

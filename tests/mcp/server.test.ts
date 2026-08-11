@@ -31,6 +31,7 @@ describe("cartoon MCP server", () => {
     expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
       "cartoon_cancel_provider_job",
       "cartoon_complete_manual_provider_job",
+      "cartoon_confirm_provider_handoff",
       "cartoon_estimate_provider_job",
       "cartoon_export",
       "cartoon_generate_stage",
@@ -39,6 +40,8 @@ describe("cartoon MCP server", () => {
       "cartoon_list_provider_jobs",
       "cartoon_list_providers",
       "cartoon_poll_provider_job",
+      "cartoon_prepare_provider_handoff",
+      "cartoon_record_provider_handoff",
       "cartoon_resume",
       "cartoon_resume_provider_job",
       "cartoon_select_providers",

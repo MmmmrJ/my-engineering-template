@@ -20,7 +20,7 @@
     },
     {
       "id": "jimeng-manual",
-      "displayName": "即梦 AI（手工导出）",
+      "displayName": "即梦 AI（Codex Chrome 交接）",
       "adapter": "jimeng-manual",
       "enabled": true,
       "dataTransfer": "user-managed upload to external cloud; download original files before import",
@@ -29,7 +29,7 @@
     },
     {
       "id": "kling-manual",
-      "displayName": "可灵 AI（手工导出）",
+      "displayName": "可灵 AI（Codex Chrome 交接）",
       "adapter": "kling-manual",
       "enabled": true,
       "dataTransfer": "user-managed upload to external cloud; download original files before import",
@@ -38,7 +38,7 @@
     },
     {
       "id": "liblib-manual",
-      "displayName": "LibLibAI（手工工作流导出）",
+      "displayName": "LibLibAI（Codex Chrome 交接）",
       "adapter": "liblib-manual",
       "enabled": true,
       "dataTransfer": "user-managed upload to external cloud; record workflow version and download outputs",
@@ -47,7 +47,7 @@
     },
     {
       "id": "jianying-manual",
-      "displayName": "剪映（手工剪辑导出）",
+      "displayName": "macOS 剪映专业版（Codex 桌面交接）",
       "adapter": "jianying-manual",
       "enabled": true,
       "dataTransfer": "user-managed local or cloud editor import/export",

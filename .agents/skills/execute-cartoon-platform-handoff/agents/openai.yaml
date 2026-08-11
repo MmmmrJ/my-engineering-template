@@ -1,0 +1,4 @@
+interface:
+  display_name: "执行卡通平台交接"
+  short_description: "安全执行即梦、可灵、LibLibAI 与剪映任务交接"
+  default_prompt: "使用 $execute-cartoon-platform-handoff 执行当前任务已确认的平台交接。"

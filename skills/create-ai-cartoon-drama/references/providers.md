@@ -11,9 +11,11 @@ Prefer direct API, then MCP, then manual operation:
 3. **MCP**: acceptable when the tool result is imported with provider/model, prompt/settings, request or resource ID, and output paths.
 4. **Manual**: fallback for browser-only or human-operated tools. Import the file and a complete metadata JSON record before review.
 
-The bundled manual profiles tailor this handoff for 即梦 AI, 可灵 AI, LibLibAI, and 剪映. Use their provider IDs so request packages contain platform-specific export instructions and remain isolated under `manual/<provider-id>/`. ComfyUI remains the advanced local entry and requires a versioned workflow JSON; do not replace it with an opaque manual package when reproducibility matters.
+The bundled manual profiles tailor this handoff for 即梦 AI, 可灵 AI, LibLibAI, and macOS 剪映专业版. Use `providers prepare-handoff` for these four profiles, then use `$execute-cartoon-platform-handoff` to operate the hash-bound manifest through Chrome or Computer Use. Keep request packages, handoff manifests, downloads, and completed files isolated under `manual/<provider-id>/`. ComfyUI remains the advanced local entry and requires a versioned workflow JSON; do not replace it with an opaque manual package when reproducibility matters.
 
 After downloading original files from a manual platform, run `cartoon providers complete-manual <task-id> --attempt <attempt-id> --result @result.json`. Do not author a task ledger or matching `*.result.json` manually; the public command verifies and archives each file before completing the durable attempt.
+
+For a Codex UI handoff, record the lifecycle through `providers record-handoff`. Persist the exact manifest hash and an attempt-specific credit confirmation through `providers confirm-handoff` before any upload or consuming click. Known platform pricing records the exact visible credit amount; unknown pricing records an acknowledged maximum. Stop when the page quote exceeds that confirmation.
 
 A prettier result does not waive provenance or review requirements.
 

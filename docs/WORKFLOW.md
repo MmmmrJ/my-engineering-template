@@ -60,9 +60,17 @@ npm run cartoon -- review <task-id> --stage <stage-id> --decision regenerate --f
 npm run cartoon -- review <task-id> --stage <stage-id> --decision abort --feedback "<reason>"
 ```
 
-Record all feedback and apply it to the named targets. Do not infer a decision from silence. Run `resume` after recording a decision that permits more work. If it returns `resume-provider-job`, `poll-provider-job`, `cancel-provider-job`, or `import-provider-output`, complete that durable action before submitting another request. Provider attempts are bound to the next stage revision; obsolete nonterminal attempts must be cancelled, never imported into a later revision.
+Record all feedback and apply it to the named targets. Do not infer a decision from silence. Run `resume` after recording a decision that permits more work. If it returns `resume-provider-job`, `poll-provider-job`, `cancel-provider-job`, `import-provider-output`, `execute-provider-handoff`, `confirm-provider-spend`, `poll-provider-handoff`, or `complete-provider-handoff`, complete that durable action before submitting another request. Provider attempts are bound to the next stage revision; obsolete nonterminal attempts must be cancelled, never imported into a later revision.
 
-For a browser/desktop platform handoff, complete the queued attempt without editing task ledgers:
+For a browser/desktop platform handoff, first prepare and confirm the durable UI manifest without editing task ledgers:
+
+```powershell
+npm run cartoon -- providers prepare-handoff <task-id> --provider <platform-manual-id> --stage <stage-id> --request @request.json [--upload <task-file> ...]
+npm run cartoon -- providers confirm-handoff <task-id> --attempt <attempt-id> --confirmation @handoff-confirmation.json
+npm run cartoon -- providers record-handoff <task-id> --attempt <attempt-id> --record @handoff-record.json
+```
+
+After original outputs are downloaded into task scope, complete the queued attempt:
 
 ```powershell
 npm run cartoon -- providers complete-manual <task-id> --attempt <attempt-id> --result @result.json

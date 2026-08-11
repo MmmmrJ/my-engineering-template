@@ -30,6 +30,8 @@ An interrupted task must resume from recorded state. Do not reconstruct approval
 
 `resume-provider-job` reuses the exact request hash, confirmation, and idempotency key. `poll-provider-job` never asks for a new cost confirmation. `cancel-provider-job` prevents an attempt prepared for an obsolete revision from being reused. `import-provider-output` points only to existing task-local archived files and must be completed with the current stage contract before review. It may return several `attemptIds`; repeat `--attempt` so all complete output sets enter one atomic revision, and use metadata `fileNames` when generic archive basenames collide.
 
+For 即梦、可灵、LibLibAI, or macOS 剪映, `resume` may return `execute-provider-handoff`, `confirm-provider-spend`, `poll-provider-handoff`, or `complete-provider-handoff`. Use `$execute-cartoon-platform-handoff`; never infer UI state from chat or a leftover page. The durable manifest, upload hashes, credit confirmation, and safe receipt are the recovery record.
+
 For a manual platform attempt, never write `*.result.json` by hand. Complete it through `cartoon providers complete-manual <task-id> --attempt <attempt-id> --result @result.json`; the command checks the exported files, archives them inside the task, updates the provider ledger, and lets the next `resume` return `import-provider-output`. Fulfill that action with `cartoon providers import-output <task-id> --attempt <attempt-id> [--attempt <attempt-id> ...] --contract @stage-contract.json --metadata @metadata.json`.
 
 ## Provider checkpoint

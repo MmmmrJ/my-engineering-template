@@ -186,6 +186,42 @@ export type ResumeAction =
   | { type: "select-providers"; missing: readonly ProviderCapability[] }
   | { type: "replace-stale"; stage: WorkflowStage; target: StaleTarget }
   | {
+      type: "execute-provider-handoff";
+      attemptId: string;
+      providerId: string;
+      capability: ProviderCapability;
+      stage: WorkflowStage;
+      handoffState: "prepared" | "awaiting_login" | "awaiting_confirmation" | "blocked";
+      manifestPath: string;
+      blockedReason?: string;
+    }
+  | {
+      type: "confirm-provider-spend";
+      attemptId: string;
+      providerId: string;
+      capability: ProviderCapability;
+      stage: WorkflowStage;
+      manifestPath: string;
+      manifestSha256: string;
+    }
+  | {
+      type: "poll-provider-handoff";
+      attemptId: string;
+      providerId: string;
+      capability: ProviderCapability;
+      stage: WorkflowStage;
+      handoffState: "submitted" | "running";
+      manifestPath: string;
+    }
+  | {
+      type: "complete-provider-handoff";
+      attemptId: string;
+      providerId: string;
+      capability: ProviderCapability;
+      stage: WorkflowStage;
+      manifestPath: string;
+    }
+  | {
       type: "resume-provider-job" | "poll-provider-job";
       attemptId: string;
       providerId: string;

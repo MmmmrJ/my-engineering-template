@@ -377,6 +377,68 @@ export class WorkflowService {
       (attempt) => attempt.stageRevision === expectedRevision,
     );
     for (const attempt of currentAttempts) {
+      if (attempt.handoff && attempt.handoff.state !== "cancelled") {
+        const handoff = attempt.handoff;
+        if (
+          handoff.state === "prepared" ||
+          handoff.state === "awaiting_login" ||
+          handoff.state === "blocked"
+        ) {
+          return {
+            type: "execute-provider-handoff",
+            attemptId: attempt.attemptId,
+            providerId: attempt.providerId,
+            capability: attempt.capability,
+            stage: activeStage,
+            handoffState: handoff.state,
+            manifestPath: handoff.manifestPath,
+            ...(handoff.blockedReason ? { blockedReason: handoff.blockedReason } : {}),
+          };
+        }
+        if (handoff.state === "awaiting_confirmation") {
+          if (handoff.spendConfirmation) {
+            return {
+              type: "execute-provider-handoff",
+              attemptId: attempt.attemptId,
+              providerId: attempt.providerId,
+              capability: attempt.capability,
+              stage: activeStage,
+              handoffState: handoff.state,
+              manifestPath: handoff.manifestPath,
+            };
+          }
+          return {
+            type: "confirm-provider-spend",
+            attemptId: attempt.attemptId,
+            providerId: attempt.providerId,
+            capability: attempt.capability,
+            stage: activeStage,
+            manifestPath: handoff.manifestPath,
+            manifestSha256: handoff.manifestSha256,
+          };
+        }
+        if (handoff.state === "submitted" || handoff.state === "running") {
+          return {
+            type: "poll-provider-handoff",
+            attemptId: attempt.attemptId,
+            providerId: attempt.providerId,
+            capability: attempt.capability,
+            stage: activeStage,
+            handoffState: handoff.state,
+            manifestPath: handoff.manifestPath,
+          };
+        }
+        if (handoff.state === "download_ready") {
+          return {
+            type: "complete-provider-handoff",
+            attemptId: attempt.attemptId,
+            providerId: attempt.providerId,
+            capability: attempt.capability,
+            stage: activeStage,
+            manifestPath: handoff.manifestPath,
+          };
+        }
+      }
       if (attempt.state === "succeeded") continue;
       if (
         (attempt.state === "prepared" || attempt.state === "failed_retryable") &&
@@ -687,11 +749,36 @@ export class WorkflowService {
                         ? {
                             providerAttemptId: providerAttempt.attemptId,
                             providerRequestSha256: providerAttempt.requestSha256,
-                            providerEstimateSha256: providerAttempt.pricingSnapshot.estimateSha256,
+                            ...(providerAttempt.pricingSnapshot
+                              ? {
+                                  providerEstimateSha256:
+                                    providerAttempt.pricingSnapshot.estimateSha256,
+                                  providerPricingStatus:
+                                    providerAttempt.pricingSnapshot.pricingStatus,
+                                }
+                              : {}),
                             providerIdempotencyKey: providerAttempt.idempotencyKey,
-                            providerPricingStatus: providerAttempt.pricingSnapshot.pricingStatus,
-                            providerConfirmationReference:
-                              providerAttempt.costConfirmation.confirmationReference,
+                            ...(providerAttempt.costConfirmation
+                              ? {
+                                  providerConfirmationReference:
+                                    providerAttempt.costConfirmation.confirmationReference,
+                                }
+                              : {}),
+                            ...(providerAttempt.handoff?.spendConfirmation
+                              ? {
+                                  providerHandoffManifestSha256:
+                                    providerAttempt.handoff.manifestSha256,
+                                  providerHandoffPlaybookVersion:
+                                    providerAttempt.handoff.playbookVersion,
+                                  providerHandoffConfirmationReference:
+                                    providerAttempt.handoff.spendConfirmation
+                                      .confirmationReference,
+                                  providerHandoffCreditUnit:
+                                    providerAttempt.handoff.spendConfirmation.creditUnit,
+                                  providerHandoffMaximumCredits:
+                                    providerAttempt.handoff.spendConfirmation.maximumCredits,
+                                }
+                              : {}),
                             ...(providerAttempt.requestMetadata
                               ? { providerRequestMetadata: providerAttempt.requestMetadata }
                               : {}),
@@ -1626,7 +1713,7 @@ function providerMetadataFromAttempt(
   output: ProviderAttemptOutput,
 ): ProviderArtifactMetadata {
   invariant(input.attemptId, "Provider attempt metadata is missing during normalization.");
-  const calculatedCost = attempt.pricingSnapshot.calculatedCost;
+  const calculatedCost = attempt.pricingSnapshot?.calculatedCost;
   const outputSeed = output.metadata?.seed ?? attempt.requestMetadata?.seed;
   const model = attempt.observedModel ?? attempt.model;
   return {
@@ -1644,7 +1731,7 @@ function providerMetadataFromAttempt(
       : {
           cost: {
             amount: calculatedCost,
-            currency: attempt.pricingSnapshot.currency,
+            currency: attempt.pricingSnapshot?.currency ?? "UNKNOWN",
           },
         }),
   };

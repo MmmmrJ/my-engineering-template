@@ -20,6 +20,16 @@ import {
   isProviderCapability,
   systemClock,
 } from "./types.js";
+import {
+  assertHandoffTransition,
+  isProviderHandoffBlockReason,
+  isProviderHandoffState,
+  type HandoffReceipt,
+  type HandoffSpendConfirmation,
+  type ProviderHandoffBlockReason,
+  type ProviderHandoffProjection,
+  type ProviderHandoffState,
+} from "./handoff.js";
 import { assertNoInlineSecrets } from "./utils.js";
 
 export type StoredAttemptState = "prepared" | ProviderJobState;
@@ -35,7 +45,9 @@ export interface StoredProviderAttempt {
   readonly idempotencyKey: string;
   readonly stage?: string;
   readonly stageRevision?: number;
-  readonly costConfirmation: PaidSubmitConfirmation;
+  readonly costConfirmation:
+    | PaidSubmitConfirmation
+    | WorkflowHandoffPreparationConfirmation;
   readonly pricingSnapshot: ProviderPricingSnapshot;
   readonly preparedAt: string;
   readonly updatedAt: string;
@@ -47,6 +59,7 @@ export interface StoredProviderAttempt {
   readonly jobMetadata?: JsonObject;
   readonly error?: ProviderJobError;
   readonly revision: number;
+  readonly handoff?: ProviderHandoffProjection;
 }
 
 interface LedgerEventBase {
@@ -91,7 +104,45 @@ interface CallFailedEvent extends LedgerEventBase {
   readonly retryAfterMs?: number;
 }
 
-type LedgerEvent = PreparedEvent | JobEvent | CallFailedEvent;
+interface HandoffPreparedEvent extends LedgerEventBase {
+  readonly type: "handoff_prepared";
+  readonly providerId: string;
+  readonly capability: ProviderCapability;
+  readonly model?: string;
+  readonly requestMetadata?: JsonObject;
+  readonly requestSha256: string;
+  readonly idempotencyKey: string;
+  readonly stage: string;
+  readonly stageRevision: number;
+  readonly externalJobId: string;
+  readonly jobState: ProviderJobState;
+  readonly observedModel?: string;
+  readonly costConfirmation: WorkflowHandoffPreparationConfirmation;
+  readonly pricingSnapshot: ProviderPricingSnapshot;
+  readonly handoff: Omit<ProviderHandoffProjection, "updatedAt">;
+}
+
+interface HandoffConfirmedEvent extends LedgerEventBase {
+  readonly type: "handoff_confirmed";
+  readonly state: "awaiting_confirmation";
+  readonly confirmation: HandoffSpendConfirmation;
+}
+
+interface HandoffRecordedEvent extends LedgerEventBase {
+  readonly type: "handoff_recorded";
+  readonly state: Exclude<ProviderHandoffState, "prepared">;
+  readonly receipt?: HandoffReceipt;
+  readonly blockedReason?: ProviderHandoffBlockReason;
+  readonly failureReason?: string;
+}
+
+type LedgerEvent =
+  | PreparedEvent
+  | JobEvent
+  | CallFailedEvent
+  | HandoffPreparedEvent
+  | HandoffConfirmedEvent
+  | HandoffRecordedEvent;
 
 export interface ProviderJobStoreOptions {
   readonly fileName?: string;
@@ -124,6 +175,17 @@ export type PaidSubmitConfirmation =
       readonly unknownPricingAcknowledged: true;
       readonly estimatedCost?: never;
     });
+
+export interface WorkflowHandoffPreparationConfirmation {
+  readonly confirmedAt: string;
+  readonly confirmedBy: "workflow";
+  readonly confirmationReference: string;
+  readonly maximumCost: 0;
+  readonly currency: "CNY";
+  readonly pricingStatus: "unknown";
+  readonly unknownPricingAcknowledged: true;
+  readonly estimatedCost?: never;
+}
 
 export interface ProviderPricingSnapshot {
   readonly schemaVersion: 1;
@@ -160,6 +222,17 @@ export interface TrackedJobOptions {
     attempt: StoredProviderAttempt,
     job: ProviderJob,
   ) => Promise<ProviderJob>;
+}
+
+export interface PreparedHandoffAttemptInput {
+  readonly attemptId: string;
+  readonly providerId: string;
+  readonly request: ProviderSubmitRequest;
+  readonly stage: string;
+  readonly stageRevision: number;
+  readonly idempotencyKey: string;
+  readonly job: ProviderJob;
+  readonly handoff: Omit<ProviderHandoffProjection, "updatedAt">;
 }
 
 /**
@@ -231,6 +304,151 @@ export class ProviderJobStore {
       stageRevision: context.stageRevision,
       costConfirmation: { ...context.costConfirmation },
       pricingSnapshot: clonePricingSnapshot(context.pricingSnapshot),
+    };
+    await this.#append(event);
+    return this.get(attemptId);
+  }
+
+  async prepareHandoff(input: PreparedHandoffAttemptInput): Promise<StoredProviderAttempt> {
+    assertNoInlineSecrets(input.request.input);
+    if (input.request.metadata) assertNoInlineSecrets(input.request.metadata, "metadata");
+    validateBasicAttemptContext(input.stage, input.stageRevision);
+    validateSafeAttemptId(input.attemptId);
+    validateIdempotencyKey(input.idempotencyKey);
+    if (
+      input.job.providerId !== input.providerId ||
+      input.job.capability !== input.request.capability
+    ) {
+      throw new ProviderConfigurationError("Manual handoff job does not match its request");
+    }
+    if (!input.job.remoteJobId.trim()) {
+      throw new ProviderConfigurationError("Manual handoff requires an external job id");
+    }
+    validateHandoffProjection(input.handoff);
+    const requestMetadata = sanitizeAuditMetadata({
+      ...(input.request.metadata ?? {}),
+      ...input.request.input,
+    });
+    const event: HandoffPreparedEvent = {
+      schemaVersion: 1,
+      eventId: randomUUID(),
+      type: "handoff_prepared",
+      at: this.#clock.now().toISOString(),
+      attemptId: input.attemptId,
+      providerId: input.providerId,
+      capability: input.request.capability,
+      ...(input.request.model ? { model: input.request.model } : {}),
+      ...(requestMetadata ? { requestMetadata } : {}),
+      requestSha256: hashRequest(input.request),
+      idempotencyKey: input.idempotencyKey,
+      stage: input.stage,
+      stageRevision: input.stageRevision,
+      externalJobId: input.job.remoteJobId,
+      jobState: input.job.state,
+      ...(input.job.model ? { observedModel: input.job.model } : {}),
+      costConfirmation: {
+        confirmedAt: this.#clock.now().toISOString(),
+        confirmedBy: "workflow",
+        confirmationReference: `handoff-package:${input.attemptId}`,
+        maximumCost: 0,
+        currency: "CNY",
+        pricingStatus: "unknown",
+        unknownPricingAcknowledged: true,
+      },
+      pricingSnapshot: handoffPackagePricingSnapshot(
+        input.providerId,
+        input.request,
+        this.#clock.now().toISOString(),
+      ),
+      handoff: structuredClone(input.handoff),
+    };
+    await this.#append(event);
+    return this.get(input.attemptId);
+  }
+
+  async confirmHandoff(
+    attemptId: string,
+    confirmation: HandoffSpendConfirmation,
+  ): Promise<StoredProviderAttempt> {
+    const existing = await this.get(attemptId);
+    if (!existing.handoff) {
+      throw new ProviderConfigurationError(`Provider attempt ${attemptId} has no handoff manifest`);
+    }
+    validateHandoffSpendConfirmation(confirmation);
+    if (existing.handoff.spendConfirmation) {
+      if (
+        JSON.stringify(existing.handoff.spendConfirmation) === JSON.stringify(confirmation)
+      ) {
+        return existing;
+      }
+      throw new ProviderConfigurationError(
+        `Provider handoff ${attemptId} already has an immutable spend confirmation`,
+      );
+    }
+    if (
+      confirmation.manifestSha256 !== existing.handoff.manifestSha256 ||
+      confirmation.providerId !== existing.providerId ||
+      confirmation.model !== existing.model
+    ) {
+      throw new ProviderConfigurationError(
+        `Provider handoff confirmation does not match attempt ${attemptId}`,
+      );
+    }
+    assertHandoffTransition(existing.handoff.state, "awaiting_confirmation");
+    const event: HandoffConfirmedEvent = {
+      schemaVersion: 1,
+      eventId: randomUUID(),
+      type: "handoff_confirmed",
+      at: this.#clock.now().toISOString(),
+      attemptId,
+      state: "awaiting_confirmation",
+      confirmation: structuredClone(confirmation),
+    };
+    await this.#append(event);
+    return this.get(attemptId);
+  }
+
+  async recordHandoff(
+    attemptId: string,
+    state: Exclude<ProviderHandoffState, "prepared">,
+    options: {
+      readonly receipt?: HandoffReceipt;
+      readonly blockedReason?: ProviderHandoffBlockReason;
+      readonly failureReason?: string;
+    } = {},
+  ): Promise<StoredProviderAttempt> {
+    const existing = await this.get(attemptId);
+    if (!existing.handoff) {
+      throw new ProviderConfigurationError(`Provider attempt ${attemptId} has no handoff manifest`);
+    }
+    assertHandoffTransition(existing.handoff.state, state);
+    if (state === "submitted" && !existing.handoff.spendConfirmation) {
+      throw new ProviderConfigurationError(
+        `Provider handoff ${attemptId} cannot be submitted before spend confirmation`,
+      );
+    }
+    if (state === "completed" && existing.state !== "succeeded") {
+      throw new ProviderConfigurationError(
+        `Provider handoff ${attemptId} cannot complete before outputs are archived`,
+      );
+    }
+    validateHandoffRecord(state, options);
+    const event: HandoffRecordedEvent = {
+      schemaVersion: 1,
+      eventId: randomUUID(),
+      type: "handoff_recorded",
+      at: this.#clock.now().toISOString(),
+      attemptId,
+      state,
+      ...(options.receipt ? { receipt: sanitizeHandoffReceipt(options.receipt) } : {}),
+      ...(options.blockedReason ? { blockedReason: options.blockedReason } : {}),
+      ...(options.failureReason
+        ? {
+            failureReason: this.#redact(options.failureReason)
+              .replace(/https?:\/\/\S+/gi, "[URL_REDACTED]")
+              .slice(0, 500),
+          }
+        : {}),
     };
     await this.#append(event);
     return this.get(attemptId);
@@ -551,7 +769,7 @@ export class ProviderJobStore {
 
   #validateFreshTransition(event: LedgerEvent): boolean {
     if (!this.#attempts) throw new Error("Provider job ledger was not initialized");
-    if (event.type === "prepared") {
+    if (event.type === "prepared" || event.type === "handoff_prepared") {
       if (this.#attempts.has(event.attemptId)) {
         throw new ProviderConfigurationError(`Duplicate prepared attempt ${event.attemptId}`);
       }
@@ -570,6 +788,14 @@ export class ProviderJobStore {
       throw new ProviderConfigurationError(
         `Ledger transition precedes prepared attempt ${event.attemptId}`,
       );
+    }
+    if (event.type === "handoff_confirmed" || event.type === "handoff_recorded") {
+      if (!existing.handoff) {
+        throw new ProviderConfigurationError(
+          `Provider handoff transition precedes handoff preparation ${event.attemptId}`,
+        );
+      }
+      return true;
     }
     if (event.type === "call_failed") {
       if (["succeeded", "failed_terminal", "cancelled"].includes(existing.state)) {
@@ -708,6 +934,32 @@ export class ProviderJobStore {
       });
       return;
     }
+    if (event.type === "handoff_prepared") {
+      if (this.#attempts.has(event.attemptId)) {
+        throw new ProviderConfigurationError(`Duplicate prepared attempt ${event.attemptId}`);
+      }
+      this.#attempts.set(event.attemptId, {
+        attemptId: event.attemptId,
+        providerId: event.providerId,
+        capability: event.capability,
+        ...(event.model ? { model: event.model } : {}),
+        ...(event.observedModel ? { observedModel: event.observedModel } : {}),
+        ...(event.requestMetadata ? { requestMetadata: event.requestMetadata } : {}),
+        requestSha256: event.requestSha256,
+        idempotencyKey: event.idempotencyKey,
+        stage: event.stage,
+        stageRevision: event.stageRevision,
+        preparedAt: event.at,
+        updatedAt: event.at,
+        state: event.jobState,
+        externalJobId: event.externalJobId,
+        costConfirmation: { ...event.costConfirmation },
+        pricingSnapshot: clonePricingSnapshot(event.pricingSnapshot),
+        handoff: { ...structuredClone(event.handoff), updatedAt: event.at },
+        revision: 1,
+      });
+      return;
+    }
     const existing = this.#attempts.get(event.attemptId);
     if (!existing) {
       throw new ProviderConfigurationError(`Ledger transition precedes prepared attempt ${event.attemptId}`);
@@ -719,6 +971,48 @@ export class ProviderJobStore {
         state: event.state,
         error: event.error,
         retryAfterMs: event.retryAfterMs,
+        revision: existing.revision + 1,
+      });
+      return;
+    }
+    if (event.type === "handoff_confirmed") {
+      this.#attempts.set(event.attemptId, {
+        ...existing,
+        updatedAt: event.at,
+        handoff: {
+          ...(existing.handoff as ProviderHandoffProjection),
+          state: event.state,
+          spendConfirmation: structuredClone(event.confirmation),
+          blockedReason: undefined,
+          failureReason: undefined,
+          updatedAt: event.at,
+        },
+        revision: existing.revision + 1,
+      });
+      return;
+    }
+    if (event.type === "handoff_recorded") {
+      this.#attempts.set(event.attemptId, {
+        ...existing,
+        updatedAt: event.at,
+        handoff: {
+          ...(existing.handoff as ProviderHandoffProjection),
+          state: event.state,
+          ...(event.receipt
+            ? {
+                receipt: {
+                  ...((existing.handoff as ProviderHandoffProjection).receipt ?? {}),
+                  ...structuredClone(event.receipt),
+                },
+              }
+            : {}),
+          ...(event.blockedReason ? { blockedReason: event.blockedReason } : {}),
+          ...(event.failureReason ? { failureReason: event.failureReason } : {}),
+          ...(event.state === "blocked"
+            ? {}
+            : { blockedReason: undefined, failureReason: undefined }),
+          updatedAt: event.at,
+        },
         revision: existing.revision + 1,
       });
       return;
@@ -846,7 +1140,16 @@ function validateLedgerEvent(value: unknown, line: number): LedgerEvent {
     typeof record.eventId !== "string" ||
     typeof record.at !== "string" ||
     typeof record.attemptId !== "string" ||
-    !["prepared", "submitted", "polled", "cancelled", "call_failed"].includes(
+    ![
+      "prepared",
+      "submitted",
+      "polled",
+      "cancelled",
+      "call_failed",
+      "handoff_prepared",
+      "handoff_confirmed",
+      "handoff_recorded",
+    ].includes(
       String(record.type),
     )
   ) {
@@ -871,6 +1174,52 @@ function validateLedgerEvent(value: unknown, line: number): LedgerEvent {
       );
     }
   }
+  if (record.type === "handoff_prepared") {
+    validateHandoffPreparedLedgerEvent(record, line);
+  }
+  if (record.type === "handoff_confirmed") {
+    validateHandoffSpendConfirmation(record.confirmation);
+    if (record.state !== "awaiting_confirmation") {
+      throw new ProviderConfigurationError(
+        `Provider job ledger line ${line} has an invalid handoff confirmation state`,
+      );
+    }
+  }
+  if (record.type === "handoff_recorded") {
+    if (
+      typeof record.state !== "string" ||
+      !isProviderHandoffState(record.state) ||
+      record.state === "prepared"
+    ) {
+      throw new ProviderConfigurationError(
+        `Provider job ledger line ${line} has an invalid handoff state`,
+      );
+    }
+    const receipt = record.receipt === undefined
+      ? undefined
+      : handoffReceiptFromUnknown(record.receipt);
+    if (record.blockedReason !== undefined && typeof record.blockedReason !== "string") {
+      throw new ProviderConfigurationError(
+        `Provider job ledger line ${line} has an invalid blocked reason`,
+      );
+    }
+    const blockedReason = record.blockedReason;
+    if (blockedReason !== undefined && !isProviderHandoffBlockReason(blockedReason)) {
+      throw new ProviderConfigurationError(
+        `Provider job ledger line ${line} has an invalid blocked reason`,
+      );
+    }
+    if (record.failureReason !== undefined && typeof record.failureReason !== "string") {
+      throw new ProviderConfigurationError(
+        `Provider job ledger line ${line} has an invalid failure reason`,
+      );
+    }
+    validateHandoffRecord(record.state, {
+      ...(receipt ? { receipt } : {}),
+      ...(blockedReason ? { blockedReason } : {}),
+      ...(record.failureReason ? { failureReason: record.failureReason } : {}),
+    });
+  }
   return value as LedgerEvent;
 }
 
@@ -888,6 +1237,317 @@ function validateAttemptContext(context: AuditedAttemptContext): void {
   }
   validatePaidSubmitConfirmation(context.costConfirmation);
   validatePricingSnapshot(context.pricingSnapshot);
+}
+
+function validateBasicAttemptContext(stage: string, stageRevision: number): void {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(stage)) {
+    throw new ProviderConfigurationError(
+      "Attempt stage must be a safe identifier of at most 64 characters",
+    );
+  }
+  if (!Number.isSafeInteger(stageRevision) || stageRevision < 1) {
+    throw new ProviderConfigurationError(
+      "Attempt stageRevision must be a positive safe integer",
+    );
+  }
+}
+
+function validateSafeAttemptId(attemptId: string): void {
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(attemptId)) {
+    throw new ProviderConfigurationError("Provider handoff attemptId must be a UUID v4");
+  }
+}
+
+function validateIdempotencyKey(value: string): void {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(value)) {
+    throw new ProviderConfigurationError(
+      "Provider idempotencyKey must be a safe identifier of at most 128 characters",
+    );
+  }
+}
+
+function validateHandoffProjection(
+  value: Omit<ProviderHandoffProjection, "updatedAt">,
+): void {
+  if (value.state !== "prepared") {
+    throw new ProviderConfigurationError("New provider handoff must start in prepared state");
+  }
+  if (
+    !value.manifestPath.trim() ||
+    !/^[a-f0-9]{64}$/.test(value.manifestSha256) ||
+    !/^[a-z0-9][a-z0-9.-]{0,63}\.v[1-9][0-9]*$/i.test(value.playbookVersion)
+  ) {
+    throw new ProviderConfigurationError("Provider handoff manifest metadata is invalid");
+  }
+  if (value.surface !== "chrome" && value.surface !== "computer-use") {
+    throw new ProviderConfigurationError("Provider handoff surface is invalid");
+  }
+  if (value.surface === "chrome" && value.officialOrigins.length === 0) {
+    throw new ProviderConfigurationError("Chrome handoff requires an official origin allowlist");
+  }
+  for (const origin of value.officialOrigins) validateOfficialOrigin(origin);
+  if (value.surface === "computer-use" && !value.allowedApplications?.length) {
+    throw new ProviderConfigurationError(
+      "Computer Use handoff requires an application allowlist",
+    );
+  }
+  for (const upload of value.uploads) {
+    if (
+      !upload.path.trim() ||
+      !upload.relativePath.trim() ||
+      upload.relativePath.startsWith("../") ||
+      !/^[a-f0-9]{64}$/.test(upload.sha256) ||
+      !Number.isSafeInteger(upload.sizeBytes) ||
+      upload.sizeBytes <= 0
+    ) {
+      throw new ProviderConfigurationError("Provider handoff upload manifest is invalid");
+    }
+  }
+}
+
+function validateOfficialOrigin(value: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch (error) {
+    throw new ProviderConfigurationError("Provider handoff official origin is invalid", {
+      cause: error,
+    });
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.origin !== value ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new ProviderConfigurationError(
+      "Provider handoff official origins must be exact credential-free HTTPS origins",
+    );
+  }
+}
+
+function validateHandoffSpendConfirmation(
+  value: unknown,
+): asserts value is HandoffSpendConfirmation {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ProviderConfigurationError("Provider handoff spend confirmation is required");
+  }
+  const confirmation = value as Record<string, unknown>;
+  if (
+    confirmation.confirmedBy !== "user" ||
+    typeof confirmation.confirmedAt !== "string" ||
+    !Number.isFinite(Date.parse(confirmation.confirmedAt)) ||
+    typeof confirmation.confirmationReference !== "string" ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9._:/#-]{0,255}$/.test(
+      confirmation.confirmationReference,
+    ) ||
+    typeof confirmation.manifestSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(confirmation.manifestSha256) ||
+    typeof confirmation.providerId !== "string" ||
+    typeof confirmation.creditUnit !== "string" ||
+    !confirmation.creditUnit.trim() ||
+    confirmation.creditUnit.length > 32 ||
+    typeof confirmation.maximumCredits !== "number" ||
+    !Number.isFinite(confirmation.maximumCredits) ||
+    confirmation.maximumCredits < 0
+  ) {
+    throw new ProviderConfigurationError("Provider handoff spend confirmation is invalid");
+  }
+  if (confirmation.pricingStatus === "known") {
+    if (
+      typeof confirmation.estimatedCredits !== "number" ||
+      !Number.isFinite(confirmation.estimatedCredits) ||
+      confirmation.estimatedCredits < 0 ||
+      confirmation.estimatedCredits > confirmation.maximumCredits ||
+      confirmation.unknownPricingAcknowledged !== undefined
+    ) {
+      throw new ProviderConfigurationError(
+        "Known handoff pricing requires exact estimatedCredits within maximumCredits",
+      );
+    }
+  } else if (confirmation.pricingStatus === "unknown") {
+    if (
+      confirmation.unknownPricingAcknowledged !== true ||
+      confirmation.estimatedCredits !== undefined
+    ) {
+      throw new ProviderConfigurationError(
+        "Unknown handoff pricing requires acknowledgement, a maximum, and no estimate",
+      );
+    }
+  } else {
+    throw new ProviderConfigurationError("Handoff pricingStatus must be known or unknown");
+  }
+}
+
+function validateHandoffRecord(
+  state: Exclude<ProviderHandoffState, "prepared">,
+  options: {
+    readonly receipt?: HandoffReceipt;
+    readonly blockedReason?: ProviderHandoffBlockReason;
+    readonly failureReason?: string;
+  },
+): void {
+  if (state === "blocked") {
+    if (!options.blockedReason || !isProviderHandoffBlockReason(options.blockedReason)) {
+      throw new ProviderConfigurationError("Blocked handoff requires a safe blockedReason");
+    }
+    if (!options.failureReason?.trim()) {
+      throw new ProviderConfigurationError("Blocked handoff requires a failureReason");
+    }
+    if (/https?:\/\//i.test(options.failureReason)) {
+      throw new ProviderConfigurationError(
+        "Blocked handoff failureReason must not persist URLs or share links",
+      );
+    }
+  } else if (options.blockedReason || options.failureReason) {
+    throw new ProviderConfigurationError(
+      "blockedReason and failureReason are only valid for blocked handoffs",
+    );
+  }
+  if (options.receipt) sanitizeHandoffReceipt(options.receipt);
+}
+
+function sanitizeHandoffReceipt(receipt: HandoffReceipt): HandoffReceipt {
+  const sanitized: HandoffReceipt = {
+    ...(safeReceiptText(receipt.externalTaskId, "externalTaskId")
+      ? { externalTaskId: safeReceiptText(receipt.externalTaskId, "externalTaskId") }
+      : {}),
+    ...(safeReceiptText(receipt.observedModel, "observedModel")
+      ? { observedModel: safeReceiptText(receipt.observedModel, "observedModel") }
+      : {}),
+    ...(receipt.observedCredits === undefined
+      ? {}
+      : { observedCredits: finiteNonnegative(receipt.observedCredits, "observedCredits") }),
+    ...(safeReceiptText(receipt.creditUnit, "creditUnit")
+      ? { creditUnit: safeReceiptText(receipt.creditUnit, "creditUnit") }
+      : {}),
+    ...(safeReceiptText(receipt.generationUuid, "generationUuid")
+      ? { generationUuid: safeReceiptText(receipt.generationUuid, "generationUuid") }
+      : {}),
+    ...(receipt.seed === undefined ? {} : { seed: receipt.seed }),
+    ...(safeReceiptText(receipt.workflowId, "workflowId")
+      ? { workflowId: safeReceiptText(receipt.workflowId, "workflowId") }
+      : {}),
+    ...(safeReceiptText(receipt.workflowVersion, "workflowVersion")
+      ? { workflowVersion: safeReceiptText(receipt.workflowVersion, "workflowVersion") }
+      : {}),
+    ...(receipt.outputCount === undefined
+      ? {}
+      : { outputCount: safeOutputCount(receipt.outputCount) }),
+    ...(safeReceiptText(receipt.evidence, "evidence", 500)
+      ? { evidence: safeReceiptText(receipt.evidence, "evidence", 500) }
+      : {}),
+  };
+  assertNoInlineSecrets(sanitized as JsonObject, "provider.handoffReceipt");
+  return sanitized;
+}
+
+function handoffReceiptFromUnknown(value: unknown): HandoffReceipt {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ProviderConfigurationError("Handoff receipt must be an object");
+  }
+  const allowed = new Set([
+    "externalTaskId",
+    "observedModel",
+    "observedCredits",
+    "creditUnit",
+    "generationUuid",
+    "seed",
+    "workflowId",
+    "workflowVersion",
+    "outputCount",
+    "evidence",
+  ]);
+  if (Object.keys(value).some((key) => !allowed.has(key))) {
+    throw new ProviderConfigurationError("Handoff receipt contains unsupported fields");
+  }
+  return sanitizeHandoffReceipt(value);
+}
+
+function safeReceiptText(
+  value: string | undefined,
+  label: string,
+  maximumLength = 128,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maximumLength || /[\r\n]/.test(normalized)) {
+    throw new ProviderConfigurationError(`Handoff receipt ${label} is invalid`);
+  }
+  if (/https?:\/\//i.test(normalized)) {
+    throw new ProviderConfigurationError(
+      `Handoff receipt ${label} must not contain URLs or temporary share links`,
+    );
+  }
+  return normalized;
+}
+
+function finiteNonnegative(value: number, label: string): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new ProviderConfigurationError(`Handoff receipt ${label} must be non-negative`);
+  }
+  return value;
+}
+
+function safeOutputCount(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new ProviderConfigurationError("Handoff receipt outputCount must be non-negative");
+  }
+  return value;
+}
+
+function validateHandoffPreparedLedgerEvent(
+  record: Record<string, unknown>,
+  line: number,
+): void {
+  if (
+    typeof record.providerId !== "string" ||
+    typeof record.capability !== "string" ||
+    !isProviderCapability(record.capability) ||
+    typeof record.requestSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/.test(record.requestSha256) ||
+    typeof record.idempotencyKey !== "string" ||
+    typeof record.stage !== "string" ||
+    typeof record.stageRevision !== "number" ||
+    typeof record.externalJobId !== "string" ||
+    typeof record.jobState !== "string" ||
+    !["queued", "running"].includes(record.jobState)
+  ) {
+    throw new ProviderConfigurationError(
+      `Provider job ledger line ${line} has invalid prepared handoff fields`,
+    );
+  }
+  validateBasicAttemptContext(record.stage, record.stageRevision);
+  validateIdempotencyKey(record.idempotencyKey);
+  validateWorkflowHandoffPreparationConfirmation(record.costConfirmation);
+  validatePricingSnapshot(record.pricingSnapshot);
+  validateHandoffProjection(
+    record.handoff as Omit<ProviderHandoffProjection, "updatedAt">,
+  );
+}
+
+function handoffPackagePricingSnapshot(
+  providerId: string,
+  request: ProviderSubmitRequest,
+  estimatedAt: string,
+): ProviderPricingSnapshot {
+  const incomplete: ProviderPricingSnapshot = {
+    schemaVersion: 1,
+    providerId,
+    capability: request.capability,
+    ...(request.model ? { model: request.model } : {}),
+    pricingStatus: "unknown",
+    currency: "CNY",
+    estimatedAt,
+    estimateSha256: "",
+  };
+  return {
+    ...incomplete,
+    estimateSha256: calculatePricingSnapshotHash(incomplete),
+  };
 }
 
 function validatePaidSubmitConfirmation(value: unknown): asserts value is PaidSubmitConfirmation {
@@ -961,6 +1621,33 @@ function validatePaidSubmitConfirmation(value: unknown): asserts value is PaidSu
         "Unknown pricing confirmation must not provide an estimatedCost",
       );
     }
+  }
+}
+
+function validateWorkflowHandoffPreparationConfirmation(
+  value: unknown,
+): asserts value is WorkflowHandoffPreparationConfirmation {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new ProviderConfigurationError(
+      "Workflow handoff package preparation audit is required",
+    );
+  }
+  const confirmation = value as Record<string, unknown>;
+  if (
+    confirmation.confirmedBy !== "workflow" ||
+    typeof confirmation.confirmedAt !== "string" ||
+    !Number.isFinite(Date.parse(confirmation.confirmedAt)) ||
+    typeof confirmation.confirmationReference !== "string" ||
+    !confirmation.confirmationReference.startsWith("handoff-package:") ||
+    confirmation.pricingStatus !== "unknown" ||
+    confirmation.unknownPricingAcknowledged !== true ||
+    confirmation.maximumCost !== 0 ||
+    confirmation.currency !== "CNY" ||
+    confirmation.estimatedCost !== undefined
+  ) {
+    throw new ProviderConfigurationError(
+      "Workflow audit is reserved for zero-consumption handoff package preparation",
+    );
   }
 }
 

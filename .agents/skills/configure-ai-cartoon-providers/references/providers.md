@@ -31,7 +31,7 @@ Before selection, verify that the chosen profile covers every required generatio
 
 Treat ComfyUI as a provider endpoint, not as proof that the loaded checkpoint or workflow is licensed. Record checkpoint/workflow identifiers and their rights basis separately.
 
-The example also enables task-scoped manual profiles for 即梦 AI, 可灵 AI, LibLibAI, and 剪映. They create durable instructions and request metadata; they do not automate a browser or claim an unofficial API. Download original outputs, reject expiring share links, and import files plus model/workflow/task identity. Keep ComfyUI for advanced local reproducibility with `metadata.workflowVersion` or a versioned `*.vNNN.json` workflow.
+The example also enables task-scoped handoff profiles for 即梦 AI, 可灵 AI, LibLibAI, and macOS 剪映专业版. The Node runtime creates durable, hash-bound manifests but does not embed browser automation or claim an unofficial API. `$execute-cartoon-platform-handoff` uses Chrome or Computer Use as the external UI executor, records only safe receipts through the public CLI/MCP surface, downloads original outputs into task scope, and rejects expiring share links. Keep ComfyUI for advanced local reproducibility with `metadata.workflowVersion` or a versioned `*.vNNN.json` workflow.
 
 Complete a queued manual attempt with `cartoon providers complete-manual <task-id> --attempt <attempt-id> --result @result.json`. This is the only supported way to create the matching manual result package; it verifies file size, signature, kind, and optional expected hash before copying outputs into task scope.
 

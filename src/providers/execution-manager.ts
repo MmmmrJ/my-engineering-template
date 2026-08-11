@@ -1,7 +1,18 @@
-import { resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { archiveLocalFile, downloadAndArchive } from "./download.js";
 import { LocalFfmpegProviderAdapter } from "./local-ffmpeg.js";
 import { ManualProviderAdapter, type ManualResultPackage } from "./manual.js";
+import { isManualPlatformAdapter } from "./platform-manual.js";
+import {
+  playbookForProvider,
+  type HandoffRecordInput,
+  type HandoffSpendConfirmation,
+  type HandoffUploadFile,
+  type ProviderHandoffManifest,
+} from "./handoff.js";
 import type { ProviderRegistry } from "./registry.js";
 import {
   calculatePricingSnapshotHash,
@@ -89,6 +100,17 @@ export interface ManualCompletionInput {
   readonly outputs: readonly ManualCompletionOutput[];
 }
 
+export interface HandoffPrepareContext {
+  readonly stage: string;
+  readonly stageRevision: number;
+  readonly uploadPaths: readonly string[];
+}
+
+export interface PreparedProviderHandoff {
+  readonly attempt: StoredProviderAttempt;
+  readonly manifest: ProviderHandoffManifest;
+}
+
 /**
  * Thin task-scoped execution boundary shared by CLI and MCP transports.
  * Workflow code remains responsible for frozen bindings and stage eligibility;
@@ -158,6 +180,138 @@ export class ProviderExecutionManager {
     );
   }
 
+  async prepareHandoff(
+    providerId: string,
+    request: ProviderSubmitRequest,
+    context: HandoffPrepareContext,
+  ): Promise<PreparedProviderHandoff> {
+    if (!isManualPlatformAdapter(providerId)) {
+      throw new ProviderConfigurationError(
+        `Provider ${providerId} does not support Codex UI handoff`,
+      );
+    }
+    const playbook = playbookForProvider(providerId);
+    if (!playbook || !playbook.capabilities.includes(request.capability)) {
+      throw new ProviderConfigurationError(
+        `Provider ${providerId} playbook does not support ${request.capability}`,
+      );
+    }
+    const adapter = this.#adapter(providerId);
+    if (!(adapter instanceof ManualProviderAdapter)) {
+      throw new ProviderConfigurationError(
+        `Provider ${providerId} is not configured as a manual platform adapter`,
+      );
+    }
+    const active = (await this.#jobs.resumeCandidates()).find((attempt) =>
+      ["prepared", "queued", "running", "failed_retryable"].includes(attempt.state),
+    );
+    if (active) {
+      throw new ProviderConfigurationError(
+        `Provider concurrency limit 1 blocks a new handoff while attempt ${active.attemptId} is ${active.state}`,
+      );
+    }
+    const uploads = await Promise.all(
+      [...new Set(context.uploadPaths.map((path) => resolve(path)))].map((path) =>
+        inspectTaskLocalUpload(this.#taskDirectory, path),
+      ),
+    );
+    const attemptId = randomUUID();
+    const idempotencyKey = request.idempotencyKey ?? `cartoon-handoff-${attemptId}`;
+    const job = await adapter.submit({ ...request, idempotencyKey });
+    if (job.state !== "queued" && job.state !== "running") {
+      throw new ProviderConfigurationError(
+        `Manual platform handoff must prepare a queued or running job, not ${job.state}`,
+      );
+    }
+    const requestPackagePath = adapter.requestPath(job.remoteJobId);
+    const requestSha256 = await sha256File(requestPackagePath);
+    const manifest: ProviderHandoffManifest = {
+      schemaVersion: 1,
+      attemptId,
+      providerId,
+      capability: request.capability,
+      stage: context.stage,
+      stageRevision: context.stageRevision,
+      playbookVersion: playbook.version,
+      surface: playbook.surface,
+      officialOrigins: [...playbook.officialOrigins],
+      ...(playbook.allowedApplications
+        ? { allowedApplications: [...playbook.allowedApplications] }
+        : {}),
+      requestPackagePath,
+      requestSha256,
+      ...(request.model ? { model: request.model } : {}),
+      uploads,
+      createdAt: this.#clock.now().toISOString(),
+    };
+    const manifestDirectory = resolve(
+      this.#taskDirectory,
+      "manual",
+      providerId,
+      "handoffs",
+    );
+    await mkdir(manifestDirectory, { recursive: true });
+    const manifestPath = resolve(manifestDirectory, `${attemptId}.handoff.json`);
+    const serializedManifest = `${JSON.stringify(manifest, null, 2)}\n`;
+    await writeFile(manifestPath, serializedManifest, { encoding: "utf8", flag: "wx" });
+    const manifestSha256 = createHash("sha256").update(serializedManifest).digest("hex");
+    const attempt = await this.#jobs.prepareHandoff({
+      attemptId,
+      providerId,
+      request,
+      stage: context.stage,
+      stageRevision: context.stageRevision,
+      idempotencyKey,
+      job,
+      handoff: {
+        state: "prepared",
+        manifestPath,
+        manifestSha256,
+        playbookVersion: playbook.version,
+        surface: playbook.surface,
+        officialOrigins: [...playbook.officialOrigins],
+        ...(playbook.allowedApplications
+          ? { allowedApplications: [...playbook.allowedApplications] }
+          : {}),
+        uploads,
+      },
+    });
+    return { attempt, manifest };
+  }
+
+  async confirmHandoff(
+    attemptId: string,
+    confirmation: HandoffSpendConfirmation,
+  ): Promise<StoredProviderAttempt> {
+    const attempt = await this.#jobs.get(attemptId);
+    await this.#verifyHandoffManifest(attempt);
+    await this.#verifyHandoffUploads(attempt);
+    return this.#jobs.confirmHandoff(attemptId, confirmation);
+  }
+
+  async recordHandoff(
+    attemptId: string,
+    input: HandoffRecordInput,
+  ): Promise<StoredProviderAttempt> {
+    const attempt = await this.#jobs.get(attemptId);
+    if (!attempt.handoff) {
+      throw new ProviderConfigurationError(`Provider attempt ${attemptId} has no handoff`);
+    }
+    if (input.state === "submitted") {
+      await this.#verifyHandoffManifest(attempt);
+      await this.#verifyHandoffUploads(attempt);
+      validateObservedSpend(attempt, input);
+    }
+    if (input.state === "cancelled" && !["cancelled", "succeeded"].includes(attempt.state)) {
+      await this.cancel(attemptId);
+    }
+    return this.#jobs.recordHandoff(attemptId, input.state, {
+      ...(input.receipt ? { receipt: input.receipt } : {}),
+      ...(input.blockedReason ? { blockedReason: input.blockedReason } : {}),
+      ...(input.failureReason ? { failureReason: input.failureReason } : {}),
+    });
+  }
+
   async poll(attemptId: string): Promise<ProviderJob> {
     const attempt = await this.#jobs.get(attemptId);
     return this.#jobs.pollTracked(
@@ -183,9 +337,23 @@ export class ProviderExecutionManager {
         `Provider attempt ${attemptId} has no submitted manual job to complete`,
       );
     }
+    if (
+      attempt.state === "succeeded" &&
+      attempt.handoff?.state === "download_ready" &&
+      attempt.externalJobId &&
+      attempt.outputs?.length
+    ) {
+      await this.#jobs.recordHandoff(attemptId, "completed");
+      return providerJobFromAttempt(attempt);
+    }
     if (attempt.state !== "queued" && attempt.state !== "running") {
       throw new ProviderConfigurationError(
         `Provider attempt ${attemptId} cannot be completed while it is ${attempt.state}`,
+      );
+    }
+    if (attempt.handoff && attempt.handoff.state !== "download_ready") {
+      throw new ProviderConfigurationError(
+        `Provider handoff ${attemptId} must be download_ready before downloaded files are completed`,
       );
     }
     const adapter = this.#adapter(attempt.providerId);
@@ -196,6 +364,9 @@ export class ProviderExecutionManager {
     }
     const outputs: ProviderOutput[] = [];
     for (const [index, output] of input.outputs.entries()) {
+      if (attempt.handoff) {
+        await inspectTaskLocalUpload(this.#taskDirectory, output.sourcePath);
+      }
       const policy = OUTPUT_DOWNLOAD_POLICIES[output.kind];
       const archived = await archiveLocalFile({
         sourcePath: output.sourcePath,
@@ -227,7 +398,9 @@ export class ProviderExecutionManager {
     } catch (error) {
       if (!isAlreadyExists(error)) throw error;
     }
-    return this.poll(attemptId);
+    const job = await this.poll(attemptId);
+    if (attempt.handoff) await this.#jobs.recordHandoff(attemptId, "completed");
+    return job;
   }
 
   resumeCandidates(): Promise<readonly StoredProviderAttempt[]> {
@@ -357,6 +530,177 @@ export class ProviderExecutionManager {
     }
     return { ...job, outputs };
   }
+
+  async #verifyHandoffUploads(attempt: StoredProviderAttempt): Promise<void> {
+    if (!attempt.handoff) {
+      throw new ProviderConfigurationError(
+        `Provider attempt ${attempt.attemptId} has no handoff upload manifest`,
+      );
+    }
+    for (const expected of attempt.handoff.uploads) {
+      const actual = await inspectTaskLocalUpload(this.#taskDirectory, expected.path);
+      if (
+        actual.relativePath !== expected.relativePath ||
+        actual.sizeBytes !== expected.sizeBytes ||
+        actual.sha256 !== expected.sha256
+      ) {
+        throw new ProviderConfigurationError(
+          `Handoff upload changed after preparation: ${expected.relativePath}`,
+        );
+      }
+    }
+  }
+
+  async #verifyHandoffManifest(attempt: StoredProviderAttempt): Promise<void> {
+    if (!attempt.handoff) {
+      throw new ProviderConfigurationError(
+        `Provider attempt ${attempt.attemptId} has no handoff manifest`,
+      );
+    }
+    await assertTaskLocalPath(this.#taskDirectory, attempt.handoff.manifestPath);
+    if ((await sha256File(attempt.handoff.manifestPath)) !== attempt.handoff.manifestSha256) {
+      throw new ProviderConfigurationError(
+        `Provider handoff manifest changed after preparation: ${attempt.attemptId}`,
+      );
+    }
+    let manifest: ProviderHandoffManifest;
+    try {
+      manifest = JSON.parse(
+        await readFile(attempt.handoff.manifestPath, "utf8"),
+      ) as ProviderHandoffManifest;
+    } catch (error) {
+      throw new ProviderConfigurationError("Provider handoff manifest is unreadable", {
+        cause: error,
+      });
+    }
+    if (
+      manifest.schemaVersion !== 1 ||
+      manifest.attemptId !== attempt.attemptId ||
+      manifest.providerId !== attempt.providerId ||
+      manifest.capability !== attempt.capability ||
+      manifest.stage !== attempt.stage ||
+      manifest.stageRevision !== attempt.stageRevision ||
+      manifest.playbookVersion !== attempt.handoff.playbookVersion ||
+      JSON.stringify(manifest.uploads) !== JSON.stringify(attempt.handoff.uploads)
+    ) {
+      throw new ProviderConfigurationError(
+        `Provider handoff manifest does not match attempt ${attempt.attemptId}`,
+      );
+    }
+    await assertTaskLocalPath(this.#taskDirectory, manifest.requestPackagePath);
+    if ((await sha256File(manifest.requestPackagePath)) !== manifest.requestSha256) {
+      throw new ProviderConfigurationError(
+        `Provider handoff request package changed after preparation: ${attempt.attemptId}`,
+      );
+    }
+  }
+}
+
+function validateObservedSpend(
+  attempt: StoredProviderAttempt,
+  input: HandoffRecordInput,
+): void {
+  const confirmation = attempt.handoff?.spendConfirmation;
+  if (!confirmation) {
+    throw new ProviderConfigurationError(
+      `Provider handoff ${attempt.attemptId} has no spend confirmation`,
+    );
+  }
+  const observedCredits = input.receipt?.observedCredits;
+  const observedUnit = input.receipt?.creditUnit;
+  if (observedCredits === undefined || observedUnit !== confirmation.creditUnit) {
+    throw new ProviderConfigurationError(
+      "Submitted handoff receipt must record the observed credit amount and matching unit",
+    );
+  }
+  if (
+    confirmation.pricingStatus === "known" &&
+    observedCredits !== confirmation.estimatedCredits
+  ) {
+    throw new ProviderConfigurationError(
+      `Observed quote ${observedCredits} ${observedUnit} does not match confirmed estimate ${confirmation.estimatedCredits}`,
+    );
+  }
+  if (observedCredits > confirmation.maximumCredits) {
+    throw new ProviderConfigurationError(
+      `Observed quote ${observedCredits} ${observedUnit} exceeds confirmed maximum ${confirmation.maximumCredits}`,
+    );
+  }
+  if (attempt.model && input.receipt?.observedModel !== attempt.model) {
+    throw new ProviderConfigurationError(
+      `Observed model ${input.receipt?.observedModel ?? "not recorded"} does not match frozen model ${attempt.model}`,
+    );
+  }
+}
+
+async function inspectTaskLocalUpload(
+  taskDirectory: string,
+  candidate: string,
+): Promise<HandoffUploadFile> {
+  const taskRoot = await realpath(taskDirectory);
+  const canonical = await realpath(resolve(candidate));
+  const relation = relative(taskRoot, canonical);
+  if (!relation || relation.startsWith(`..${sep}`) || relation === ".." || isAbsolute(relation)) {
+    throw new ProviderConfigurationError(
+      `Handoff upload is outside the task workspace: ${candidate}`,
+    );
+  }
+  const details = await stat(canonical);
+  if (!details.isFile() || details.size <= 0) {
+    throw new ProviderConfigurationError(`Handoff upload must be a non-empty file: ${candidate}`);
+  }
+  return {
+    path: canonical,
+    relativePath: relation.split(sep).join("/"),
+    sha256: await sha256File(canonical),
+    sizeBytes: details.size,
+  };
+}
+
+async function assertTaskLocalPath(taskDirectory: string, candidate: string): Promise<void> {
+  const taskRoot = await realpath(taskDirectory);
+  const canonical = await realpath(resolve(candidate));
+  const relation = relative(taskRoot, canonical);
+  if (!relation || relation.startsWith(`..${sep}`) || relation === ".." || isAbsolute(relation)) {
+    throw new ProviderConfigurationError(`Path is outside the task workspace: ${candidate}`);
+  }
+}
+
+async function sha256File(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  await new Promise<void>((resolvePromise, reject) => {
+    const stream = createReadStream(path);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", resolvePromise);
+  });
+  return hash.digest("hex");
+}
+
+function providerJobFromAttempt(attempt: StoredProviderAttempt): ProviderJob {
+  if (!attempt.externalJobId || attempt.state === "prepared") {
+    throw new ProviderConfigurationError(
+      `Provider attempt ${attempt.attemptId} has no completed external job`,
+    );
+  }
+  const model = attempt.observedModel ?? attempt.model;
+  return {
+    id: `${attempt.providerId}:${attempt.externalJobId}`,
+    remoteJobId: attempt.externalJobId,
+    providerId: attempt.providerId,
+    capability: attempt.capability,
+    state: attempt.state,
+    ...(model ? { model } : {}),
+    submittedAt: attempt.preparedAt,
+    updatedAt: attempt.updatedAt,
+    ...(attempt.progress === undefined ? {} : { progress: attempt.progress }),
+    ...(attempt.outputs ? { outputs: attempt.outputs } : {}),
+    ...(attempt.error ? { error: attempt.error } : {}),
+    ...(attempt.retryAfterMs === undefined
+      ? {}
+      : { retryAfterMs: attempt.retryAfterMs }),
+    ...(attempt.jobMetadata ? { metadata: attempt.jobMetadata } : {}),
+  };
 }
 
 function bindPricingEstimate(

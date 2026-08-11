@@ -8,8 +8,8 @@ Provider routing is capability-based and provider-neutral. The committed `config
 | --- | --- | --- | --- |
 | `local-ffmpeg` | Task-scoped contact sheets, timeline rendering, and delivery QC | none | Enabled by default; automatically discovers explicit, environment, npm-managed, or system executables |
 | `manual` | Durable fallback import | none | Enabled by default; requires file plus metadata import |
-| `jimeng-manual` | 即梦 AI browser/desktop handoff | none | Task-scoped request package; download original image/video files before import |
-| `kling-manual` | 可灵 AI browser/desktop handoff | none | Task-scoped request package; retain model/mode/task identity and local originals |
+| `jimeng-manual` | 即梦 AI China Chrome handoff | none | Versioned `jimeng-cn.v1` playbook; task-local hash-bound uploads and originals |
+| `kling-manual` | 可灵 AI China Chrome handoff | none | Versioned `kling-cn.v1` playbook; retain model/mode/task identity and originals |
 | `liblib-manual` | LibLibAI hosted workflow handoff | none | Records workflow version, model/LoRA, seed, and generation UUID when available |
 | `jianying-manual` | 剪映 editable timeline handoff | none | Exports MP4 plus SRT/ASS and returns to a separate `quality.inspect` route |
 | `minimax` | MiniMax image, video, and TTS API | `MINIMAX_API_KEY` | Disabled until explicitly configured; image/TTS use official synchronous endpoints and video uses durable async routes |
@@ -49,7 +49,7 @@ Use the most durable available mode:
 
 The order is about recovery and auditability, not creative quality. All modes enter the same artifact contract and the task's strict or quick review policy.
 
-Platform manual providers are not browser automation and do not claim unofficial APIs. `providers submit` writes a tailored package under `output/<task-id>/manual/<provider-id>/requests/`; the user operates the platform and downloads durable files. `providers complete-manual` safely verifies and archives those files and writes the matching result package; then use `providers import-output` with that attempt ID to enter the artifact/review surface. Share pages, login-only URLs, and expiring links are not deliverables.
+Platform handoff providers do not claim unofficial APIs and do not embed browser automation in the Node adapter. `providers prepare-handoff` writes a tailored request package plus a hash-bound manifest under `output/<task-id>/manual/<provider-id>/`; `$execute-cartoon-platform-handoff` operates the declared Chrome origin or macOS 剪映 application and records observations only through CLI/MCP. `confirm-handoff` binds one exact upload set and credit ceiling to the attempt. `complete-manual` safely verifies and archives task-local downloads; then `providers import-output` enters the artifact/review surface. Share pages, login-only URLs, and expiring links are not deliverables.
 
 Example completion input:
 

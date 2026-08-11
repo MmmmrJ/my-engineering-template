@@ -7,6 +7,7 @@ export * from "./alibaba-wan.js";
 export * from "./comfyui.js";
 export * from "./manual.js";
 export * from "./platform-manual.js";
+export * from "./handoff.js";
 export * from "./hyperframes.js";
 export * from "./local-ffmpeg.js";
 export * from "./download.js";
