@@ -1,5 +1,7 @@
 # AI Cartoon Workflow
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 A clone-ready, provider-neutral workflow for producing a 60-90 second vertical AI cartoon drama. It starts from an original or proven-public-domain IP and a theme, runs nine sequential production stages, and exports traceable media artifacts. Strict review remains the default; an explicit quick mode reduces user interruptions to three bundled checkpoints without skipping structured validation.
 
 V1 uses one durable sequential controller and no runtime subagents.
