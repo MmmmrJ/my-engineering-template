@@ -26,6 +26,10 @@ Copyright and license notices remain with the MediaGo contributors. The Apache L
 
 Copyright and license notices remain with the DirectorSKILL contributors.
 
+## Optional managed media binaries
+
+Normal npm installation may install `ffmpeg-static` 5.3.0 and `@derhuerst/ffprobe-static` 5.3.0. They are optional subprocess tools and are not committed to this repository. Both packages are sourced from https://github.com/eugeneware/ffmpeg-static and are licensed GPL-3.0-or-later; their platform binaries include separate upstream build/license information. This repository's Apache-2.0 source license does not replace those terms. Distributors that bundle or redistribute the binaries must preserve the applicable GPL notices and corresponding-source obligations. Users may omit them with `npm ci --omit=optional` and provide a trusted system, container, or explicit toolchain instead.
+
 ## Optional external integrations
 
 The following projects are compatibility references only. They are not copied, installed, invoked, or redistributed by the core workflow. Users who install or invoke them separately must comply with their licenses, provider terms, and any media/content restrictions.

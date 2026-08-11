@@ -1,4 +1,5 @@
-import { createHash, createReadStream } from "node:crypto";
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -16,13 +17,16 @@ import {
   type FinalDeliveryValidationResult,
   type FinalDeliveryValidatorDependencies,
 } from "../media/delivery.js";
+import { resolveFfmpegToolchain } from "../media/ffmpeg.js";
 import {
   executeMediaPlan as executeMediaPlanDefault,
   type ExecutedMediaPlan,
   type ExecuteMediaPlanOptions,
 } from "../media/executor.js";
 import {
+  createContactSheetPlan,
   createTimelineRenderPlan,
+  type ContactSheetSpec,
   type MediaCommandPlan,
   type TimelineRenderSpec,
 } from "../media/plans.js";
@@ -77,7 +81,7 @@ const timelineAudioTrackSchema = z.strictObject({
   gainDb: z.number().finite().min(-96).max(24).optional(),
 });
 
-const renderRequestSchema = z.strictObject({
+const timelineRenderRequestSchema = z.strictObject({
   schemaVersion: z.literal(1),
   timeline: z.strictObject({
     clips: z.array(timelineClipSchema).min(1).max(100),
@@ -98,6 +102,25 @@ const renderRequestSchema = z.strictObject({
     ),
   }),
 });
+
+const contactSheetRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  contactSheet: z.strictObject({
+    inputPaths: z.array(safeRelativePathSchema).min(1).max(100),
+    outputPath: safeRelativePathSchema.refine(
+      (value) => extname(value).toLowerCase() === ".png",
+      "must end in .png",
+    ),
+    columns: positiveIntegerSchema.optional(),
+    thumbnailWidth: positiveIntegerSchema.optional(),
+    thumbnailHeight: positiveIntegerSchema.optional(),
+  }),
+});
+
+const renderRequestSchema = z.union([
+  timelineRenderRequestSchema,
+  contactSheetRequestSchema,
+]);
 
 const qcExpectationsSchema = z.strictObject({
   requireVideo: z.boolean().optional(),
@@ -203,8 +226,12 @@ export class LocalFfmpegProviderAdapter implements ProviderAdapter {
       throw new ProviderConfigurationError("Local FFmpeg currency must be a three-letter upper-case code");
     }
     this.#taskDirectory = config.taskDirectory ? resolve(config.taskDirectory) : undefined;
-    this.#ffmpegPath = config.ffmpegPath ?? "ffmpeg";
-    this.#ffprobePath = config.ffprobePath ?? "ffprobe";
+    const toolchain = resolveFfmpegToolchain({
+      ffmpegPath: config.ffmpegPath,
+      ffprobePath: config.ffprobePath,
+    });
+    this.#ffmpegPath = toolchain.ffmpeg.executable;
+    this.#ffprobePath = toolchain.ffprobe.executable;
     this.#runner = config.runner ?? runProcess;
     this.#clock = config.clock ?? systemClock;
     this.#ids = config.ids ?? uuidGenerator;
@@ -235,6 +262,10 @@ export class LocalFfmpegProviderAdapter implements ProviderAdapter {
         timelineSchemaVersion: 1,
         qualitySchemaVersion: 1,
         executableNames: [this.#ffmpegPath, this.#ffprobePath],
+        executableSources: {
+          ffmpeg: toolchain.ffmpeg.source,
+          ffprobe: toolchain.ffprobe.source,
+        },
       },
     };
   }
@@ -352,6 +383,43 @@ export class LocalFfmpegProviderAdapter implements ProviderAdapter {
     workspaceRoot: string,
   ): Promise<ProviderJob> {
     const parsed = parseInput(renderRequestSchema, request.input, "render.timeline");
+    if ("contactSheet" in parsed) {
+      const inputPaths = await Promise.all(
+        parsed.contactSheet.inputPaths.map((path) =>
+          existingWorkspaceFile(workspaceRoot, path, "contact-sheet input"),
+        ),
+      );
+      const outputPath = await newWorkspaceFile(
+        workspaceRoot,
+        parsed.contactSheet.outputPath,
+        "contact-sheet output",
+      );
+      const spec: ContactSheetSpec = {
+        inputPaths,
+        outputPath,
+        ...(parsed.contactSheet.columns ? { columns: parsed.contactSheet.columns } : {}),
+        ...(parsed.contactSheet.thumbnailWidth
+          ? { thumbnailWidth: parsed.contactSheet.thumbnailWidth }
+          : {}),
+        ...(parsed.contactSheet.thumbnailHeight
+          ? { thumbnailHeight: parsed.contactSheet.thumbnailHeight }
+          : {}),
+      };
+      const executed = await this.#executeMediaPlan(
+        createContactSheetPlan(spec, { ffmpegPath: this.#ffmpegPath }),
+        { workspaceRoot, runner: this.#runner },
+      );
+      const output = await verifiedOutput(
+        workspaceRoot,
+        executed.outputPath,
+        "image",
+        "image/png",
+      );
+      if (output.sizeBytes !== executed.sizeBytes || output.sha256 !== executed.sha256) {
+        throw new ProviderProtocolError("Media executor receipt does not match the contact sheet");
+      }
+      return this.#job(remoteJobId, request, "succeeded", output);
+    }
     const timeline = parsed.timeline;
     const clips = await Promise.all(
       timeline.clips.map(async (clip) => ({
@@ -583,8 +651,18 @@ export class LocalFfmpegProviderAdapter implements ProviderAdapter {
     if (!output?.localPath || !output.mimeType || !output.sha256 || output.sizeBytes === undefined) {
       throw new ProviderProtocolError(`Local FFmpeg result ${remoteJobId} has no verified output`);
     }
-    const expectedKind = capability === "render.timeline" ? "video" : "json";
-    const expectedMimeType = capability === "render.timeline" ? "video/mp4" : "application/json";
+    const expectedKind = output.kind;
+    const expectedMimeType = output.mimeType;
+    const validOutput =
+      capability === "quality.inspect"
+        ? expectedKind === "json" && expectedMimeType === "application/json"
+        : (expectedKind === "video" && expectedMimeType === "video/mp4") ||
+          (expectedKind === "image" && expectedMimeType === "image/png");
+    if (!validOutput) {
+      throw new ProviderProtocolError(
+        `Local FFmpeg result ${remoteJobId} has an invalid output kind or MIME type`,
+      );
+    }
     const verified = await verifiedOutput(
       await this.#workspaceRoot(),
       output.localPath,
@@ -758,7 +836,7 @@ function validatePersistedJob(
   ) {
     throw new ProviderProtocolError("Local FFmpeg result envelope is invalid");
   }
-  const output = job.outputs[0];
+  const output: unknown = (job.outputs as unknown[])[0];
   if (output === null || typeof output !== "object" || Array.isArray(output)) {
     throw new ProviderProtocolError("Local FFmpeg result output is invalid");
   }

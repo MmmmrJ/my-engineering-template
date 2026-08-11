@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -581,6 +581,83 @@ describe("ProviderExecutionManager", () => {
     expect(packageB).not.toContain("task A");
     await expect(readdir(sharedRequests)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(readdir(sharedResults)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("writes a platform-tailored handoff into its own task-scoped directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-jianying-scope-"));
+    temporaryDirectories.push(root);
+    const registry = new ProviderRegistry([
+      new ManualProviderAdapter({
+        id: "jianying-manual",
+        adapter: "jianying-manual",
+        requestDirectory: join(root, "shared", "requests"),
+        resultDirectory: join(root, "shared", "results"),
+        capabilities: ["render.timeline"],
+        instructions: "Export MP4 plus SRT and ASS, then continue to quality.inspect.",
+        metadata: { platform: "jianying", instructions: "Export MP4 plus SRT and ASS, then continue to quality.inspect." },
+      }),
+    ]);
+    const task = join(root, "task");
+    const manager = new ProviderExecutionManager(registry, task);
+
+    await manager.submitConfirmed(
+      "jianying-manual",
+      { capability: "render.timeline", input: { timeline: "edit-v001.json" } },
+      confirmedContext("edit"),
+    );
+
+    const requestDirectory = join(task, "manual", "jianying-manual", "requests");
+    const files = await readdir(requestDirectory);
+    const packageText = await readFile(join(requestDirectory, files[0] ?? ""), "utf8");
+    expect(packageText).toContain("Export MP4 plus SRT and ASS");
+    expect(packageText).toContain("edit-v001.json");
+    await expect(readdir(join(task, "manual", "requests"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("safely completes a manual attempt from user-exported local files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-manual-complete-"));
+    temporaryDirectories.push(root);
+    const source = join(root, "exported.png");
+    await writeFile(source, onePixelPng);
+    const registry = new ProviderRegistry([
+      new ManualProviderAdapter({
+        id: "manual",
+        requestDirectory: join(root, "shared", "requests"),
+        resultDirectory: join(root, "shared", "results"),
+      }),
+    ]);
+    const task = join(root, "task");
+    const manager = new ProviderExecutionManager(registry, task, {
+      clock: { now: () => new Date("2026-08-10T00:00:00.000Z") },
+    });
+    const submitted = await manager.submitConfirmed(
+      "manual",
+      { capability: "image.generate", input: { prompt: "manual output" } },
+      confirmedContext("assets"),
+    );
+    await expect(
+      manager.completeManual(submitted.attempt.attemptId, {
+        outputs: [{ kind: "audio", sourcePath: source }],
+      }),
+    ).rejects.toThrow(/not allowed for audio/i);
+    const completed = await manager.completeManual(submitted.attempt.attemptId, {
+      outputs: [{ kind: "image", sourcePath: source }],
+    });
+
+    expect(completed.state).toBe("succeeded");
+    expect(completed.outputs?.[0]).toMatchObject({
+      kind: "image",
+      mimeType: "image/png",
+      sizeBytes: onePixelPng.length,
+    });
+    expect(completed.outputs?.[0]?.localPath).toContain(join("manual", "completed"));
+    expect(completed.outputs?.[0]?.archivedPath).toContain(join("provider-downloads", "archive"));
+    expect(await manager.resumeCandidates()).toEqual([]);
+    await expect(
+      manager.completeManual(submitted.attempt.attemptId, {
+        outputs: [{ kind: "audio", sourcePath: source }],
+      }),
+    ).rejects.toThrow(/cannot be completed while it is succeeded/i);
   });
 });
 

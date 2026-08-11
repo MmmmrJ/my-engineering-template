@@ -1,6 +1,7 @@
 import type { ArtifactRecord, StaleTarget } from "./artifacts.js";
-import type { ReviewDecision, RevisionTarget } from "./review.js";
+import type { ReviewActor, ReviewDecision, ReviewMode, RevisionTarget } from "./review.js";
 import type { ProviderCapability, WorkflowStage } from "./stages.js";
+import type { StageContract } from "./stage-contracts.js";
 
 export interface WorkflowEventBase {
   eventId: string;
@@ -15,6 +16,8 @@ export interface TaskCreatedEvent extends WorkflowEventBase {
     ip: string;
     theme: string;
   };
+  /** Missing on legacy event logs and therefore interpreted as strict. */
+  reviewMode?: ReviewMode;
 }
 
 export interface ArtifactImportedEvent extends WorkflowEventBase {
@@ -29,6 +32,7 @@ export interface RevisionCreatedEvent extends WorkflowEventBase {
   artifactIds: readonly string[];
   summary?: string;
   targetIds?: readonly string[];
+  stageContract?: StageContract;
 }
 
 export interface ReviewRecordedEvent extends WorkflowEventBase {
@@ -37,6 +41,8 @@ export interface ReviewRecordedEvent extends WorkflowEventBase {
   decision: ReviewDecision;
   feedback?: string;
   targetIds?: readonly string[];
+  /** Missing on legacy event logs and therefore interpreted as user. */
+  actor?: ReviewActor;
 }
 
 export interface RevisionRequestedEvent extends WorkflowEventBase {

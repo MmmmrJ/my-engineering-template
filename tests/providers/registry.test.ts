@@ -97,6 +97,14 @@ describe("provider configuration", () => {
         schemaVersion: 1,
         providers: [
           {
+            id: "local-ffmpeg",
+            adapter: "local-ffmpeg",
+            enabled: true,
+            ffmpegPath: "ffmpeg",
+            ffprobePath: "ffprobe",
+            currency: "CNY",
+          },
+          {
             id: "manual",
             adapter: "manual",
             enabled: true,
@@ -125,12 +133,20 @@ describe("provider configuration", () => {
     const facade = new ProviderRegistryFacade(registry);
 
     expect(registry.hasAdapter("manual")).toBe(true);
+    expect(registry.hasAdapter("local-ffmpeg")).toBe(true);
     expect(registry.hasAdapter("minimax")).toBe(false);
     expect((await facade.list()).map((item) => [item.id, item.configured])).toEqual([
+      ["local-ffmpeg", true],
       ["manual", true],
       ["minimax", false],
       ["minimax-official-mcp", false],
     ]);
+    expect(registry.descriptor("local-ffmpeg")).toMatchObject({
+      adapter: "local-ffmpeg",
+      capabilities: ["render.timeline", "quality.inspect"],
+      dataTransfer: "local-only",
+      price: { amount: 0, currency: "CNY", unit: "request" },
+    });
     expect(await facade.check("minimax")).toMatchObject([
       { providerId: "minimax", ok: false, metadata: { status: "unconfigured" } },
     ]);
@@ -170,5 +186,62 @@ describe("provider configuration", () => {
       }),
     );
     await expect(loadProviderRegistry(configPath)).rejects.toThrow(/privacyUrl must be an HTTPS URL/);
+  });
+
+  it("loads platform-specific manual handoffs and preserves ComfyUI as advanced local", async () => {
+    const root = await mkdtemp(join(tmpdir(), "provider-platform-manual-"));
+    temporaryDirectories.push(root);
+    const configPath = join(root, "providers.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        providers: [
+          ...["jimeng-manual", "kling-manual", "liblib-manual", "jianying-manual"].map(
+            (adapter) => ({
+              id: adapter,
+              adapter,
+              requestDirectory: `${adapter}/requests`,
+              resultDirectory: `${adapter}/results`,
+            }),
+          ),
+          {
+            id: "comfyui",
+            adapter: "comfyui",
+            baseUrl: "http://127.0.0.1:8188",
+            workflowDirectory: "workflows",
+          },
+        ],
+      }),
+    );
+    const registry = await loadProviderRegistry(configPath, {
+      baseDirectory: root,
+      environment: { COMFYUI_CLIENT_ID: "test-client" },
+      includeHyperFrames: false,
+    });
+
+    expect(registry.descriptor("jimeng-manual")).toMatchObject({
+      adapter: "jimeng-manual",
+      dataTransfer: "user-managed",
+      metadata: { platform: "jimeng-ai", manualPackage: true },
+    });
+    expect(registry.descriptor("jimeng-manual").capabilities).toContain("image.generate");
+    expect(registry.descriptor("jimeng-manual").capabilities).toContain("video.i2v");
+    expect(registry.descriptor("kling-manual").metadata).toMatchObject({ platform: "kling-ai" });
+    expect(registry.descriptor("liblib-manual").metadata).toMatchObject({
+      platform: "liblibai",
+      workflowVersionRecommended: true,
+    });
+    expect(registry.descriptor("jianying-manual")).toMatchObject({
+      capabilities: ["render.timeline"],
+      metadata: { qualityInspectionRequired: true },
+    });
+    expect(registry.descriptor("comfyui").metadata).toMatchObject({
+      advancedLocalWorkflow: true,
+    });
+    const workflowVersionPolicy = registry.descriptor("comfyui").metadata?.workflowVersionPolicy;
+    expect(typeof workflowVersionPolicy).toBe("string");
+    if (typeof workflowVersionPolicy !== "string") throw new Error("Expected workflow policy");
+    expect(workflowVersionPolicy).toContain("workflowVersion");
   });
 });

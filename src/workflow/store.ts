@@ -613,6 +613,15 @@ export function projectManifest(event: TaskCreatedEvent): ProjectManifest {
       audioSampleRate: 48000,
       subtitles: { language: "zh-CN", sidecars: ["srt", "ass"], burnIn: true },
     },
-    policies: { voiceClone: { defaultEnabled: false, consentRequired: true } },
+    policies: {
+      review: {
+        mode: event.reviewMode ?? "strict",
+        explicitCheckpoints:
+          event.reviewMode === "quick"
+            ? ["storyboard", "keyframes", "qc"]
+            : [...WORKFLOW_STAGES],
+      },
+      voiceClone: { defaultEnabled: false, consentRequired: true },
+    },
   };
 }

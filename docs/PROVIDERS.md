@@ -6,14 +6,19 @@ Provider routing is capability-based and provider-neutral. The committed `config
 
 | ID | Role | Environment reference | Notes |
 | --- | --- | --- | --- |
+| `local-ffmpeg` | Task-scoped contact sheets, timeline rendering, and delivery QC | none | Enabled by default; automatically discovers explicit, environment, npm-managed, or system executables |
 | `manual` | Durable fallback import | none | Enabled by default; requires file plus metadata import |
+| `jimeng-manual` | 即梦 AI browser/desktop handoff | none | Task-scoped request package; download original image/video files before import |
+| `kling-manual` | 可灵 AI browser/desktop handoff | none | Task-scoped request package; retain model/mode/task identity and local originals |
+| `liblib-manual` | LibLibAI hosted workflow handoff | none | Records workflow version, model/LoRA, seed, and generation UUID when available |
+| `jianying-manual` | 剪映 editable timeline handoff | none | Exports MP4 plus SRT/ASS and returns to a separate `quality.inspect` route |
 | `minimax` | MiniMax image, video, and TTS API | `MINIMAX_API_KEY` | Disabled until explicitly configured; image/TTS use official synchronous endpoints and video uses durable async routes |
 | `alibaba-wan` | Alibaba Wan through DashScope | `DASHSCOPE_API_KEY` | Disabled until explicitly configured; current example declares image generation/editing and t2v/i2v/r2v routes |
-| `comfyui` | Optional local/remote ComfyUI workflows | `COMFYUI_CLIENT_ID` | Availability and capability depend on installed workflows/checkpoints |
+| `comfyui` | Advanced local/remote ComfyUI workflows | `COMFYUI_CLIENT_ID` | Requires versioned workflow JSON; availability and rights depend on installed workflows/checkpoints |
 
 An enabled provider is not automatically healthy, funded, authorized for commercial use, or capable of every stage. Run health and capability checks.
 
-The v1 freeze must bind `image.generate`, `video.i2v`, `audio.tts`, `audio.music`, `audio.sfx`, and `render.timeline`. A manual binding may satisfy an unavailable automated route only when its import/provenance contract is ready before selection.
+The v1 freeze must bind `image.generate`, `video.i2v`, `audio.tts`, `audio.music`, `audio.sfx`, and `render.timeline`. Prefer `local-ffmpeg` for `render.timeline`; it also provides `quality.inspect`. A manual binding may satisfy an unavailable automated route only when its import/provenance contract is ready before selection.
 
 ## Configure safely
 
@@ -29,15 +34,35 @@ npm run cartoon -- providers check
 
 Prefer an OS/CI secret store for persistent credentials. Do not echo secret values, paste them into chat, or place them in `.env.example`, provider JSON, task metadata, or logs.
 
+`local-ffmpeg` is task-scoped by the provider execution manager. Requests contain only versioned data and task-relative paths; they cannot pass raw FFmpeg flags or address files outside `output/<task-id>/`. The route returns immutable MP4, PNG, or JSON outputs with size and SHA-256 evidence. Its estimate is mechanically known as zero, but every new submission still records the standard explicit zero-cost confirmation.
+
+Tool precedence is explicit `ffmpegPath`/`ffprobePath`, environment overrides, pinned optional npm packages, then commands on `PATH`. Most users only run `npm ci`. Use `npm ci --omit=optional` for a system/container toolchain, or set `AI_CARTOON_DISABLE_MANAGED_FFMPEG=1` to ignore installed managed binaries. Full deployment and GPL redistribution considerations are in [FFmpeg deployment](FFMPEG_DEPLOYMENT.md).
+
 ## API, MCP, and manual durability
 
 Use the most durable available mode:
 
-1. **Direct API**: preserves idempotency keys, request IDs, polling states, model parameters, structured failures, and retry decisions.
-2. **MCP**: useful for tool access, but preserve its server/tool, resource ID, model, arguments, and returned files through the task import boundary.
-3. **Manual**: acceptable when a user must operate an external UI. Preserve exported files and metadata before review.
+1. **Task-scoped local**: preserves versioned input, exact command plan, output hashes, and executor receipts without transferring data off-machine.
+2. **Direct API**: preserves idempotency keys, request IDs, polling states, model parameters, structured failures, and retry decisions.
+3. **MCP**: useful for tool access, but preserve its server/tool, resource ID, model, arguments, and returned files through the task import boundary.
+4. **Manual**: acceptable when a user must operate an external UI. Preserve exported files and metadata before review.
 
-The order is about recovery and auditability, not creative quality. All modes receive the same user review.
+The order is about recovery and auditability, not creative quality. All modes enter the same artifact contract and the task's strict or quick review policy.
+
+Platform manual providers are not browser automation and do not claim unofficial APIs. `providers submit` writes a tailored package under `output/<task-id>/manual/<provider-id>/requests/`; the user operates the platform and downloads durable files. `providers complete-manual` safely verifies and archives those files and writes the matching result package; then resume/poll/import through the normal job and artifact surfaces. Share pages, login-only URLs, and expiring links are not deliverables.
+
+Example completion input:
+
+```json
+{
+  "outputs": [
+    { "kind": "image", "sourcePath": "D:/exports/SHOT_01.png" },
+    { "kind": "video", "sourcePath": "D:/exports/SHOT_01.mp4", "expectedSha256": "<64 hex characters>" }
+  ]
+}
+```
+
+Omit `expectedSha256` when the external platform does not provide one; the workflow still calculates and persists its own SHA-256 after validating size, signature, and file kind.
 
 ## Select and freeze
 
@@ -46,6 +71,10 @@ After storyboard approval, verify required capabilities and freeze a selection:
 ```powershell
 npm run cartoon -- providers select <task-id> --provider manual --mode manual
 ```
+
+For a mixed explicit map, bind deterministic rendering locally with `--binding render.timeline=local-ffmpeg:api`. Also include `--binding quality.inspect=local-ffmpeg:api` in the same initial selection when G9 QC should use the provider-job surface; `quality.inspect` is optional rather than one of the six required freeze capabilities. Here `api` means the direct provider adapter surface; the FFmpeg process and all media remain local.
+
+Platform handoffs are capability-specific, so freeze them with a complete mixed map rather than `--provider <platform>` for all routes. For example, use `--binding image.generate=jimeng-manual:manual`, `--binding video.i2v=kling-manual:manual`, generic/manual audio bindings, and either `render.timeline=jianying-manual:manual` or `render.timeline=local-ffmpeg:api`. Keep `quality.inspect=local-ffmpeg:api` when 剪映 performs the edit so the returned MP4 is independently checked.
 
 Do this before G4 (`assets`). The task must retain the selected provider/profile and concrete models. V1 rejects replacement of a frozen binding. On outage or quota exhaustion, stop and show the user retry, wait, use the already-selected manual path, or create a replacement task; never switch a paid provider silently.
 

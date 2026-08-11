@@ -29,6 +29,7 @@ describe("provider execution MCP tools", () => {
     const registry = new ProviderRegistry([fakeAdapter(() => ++submitCalls)]);
     let sequence = 0;
     const workflow = new WorkflowService({
+      legacyUnstructuredImportsForTests: true,
       defaultRoot: root,
       providerFacade: new ProviderRegistryFacade(registry),
       clock: () => new Date("2026-08-10T01:02:03.000Z"),

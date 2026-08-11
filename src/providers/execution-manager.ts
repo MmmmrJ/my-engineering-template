@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
-import { downloadAndArchive } from "./download.js";
-import { ManualProviderAdapter } from "./manual.js";
+import { archiveLocalFile, downloadAndArchive } from "./download.js";
+import { LocalFfmpegProviderAdapter } from "./local-ffmpeg.js";
+import { ManualProviderAdapter, type ManualResultPackage } from "./manual.js";
 import type { ProviderRegistry } from "./registry.js";
 import {
   calculatePricingSnapshotHash,
@@ -76,6 +77,16 @@ export interface ProviderExecutionManagerOptions extends ProviderJobStoreOptions
    * one origin does not permit another host, port, scheme, or redirect origin.
    */
   readonly trustedComfyUiOutputOrigins?: readonly string[];
+}
+
+export interface ManualCompletionOutput {
+  readonly kind: ProviderOutput["kind"];
+  readonly sourcePath: string;
+  readonly expectedSha256?: string;
+}
+
+export interface ManualCompletionInput {
+  readonly outputs: readonly ManualCompletionOutput[];
 }
 
 /**
@@ -161,6 +172,64 @@ export class ProviderExecutionManager {
     return this.#jobs.cancelTracked(this.#adapter(attempt.providerId), attemptId);
   }
 
+  /** Safely archives user-exported files and completes the matching durable manual attempt. */
+  async completeManual(attemptId: string, input: ManualCompletionInput): Promise<ProviderJob> {
+    if (!input.outputs.length) {
+      throw new ProviderConfigurationError("Manual completion requires at least one output file");
+    }
+    const attempt = await this.#jobs.get(attemptId);
+    if (!attempt.externalJobId) {
+      throw new ProviderConfigurationError(
+        `Provider attempt ${attemptId} has no submitted manual job to complete`,
+      );
+    }
+    if (attempt.state !== "queued" && attempt.state !== "running") {
+      throw new ProviderConfigurationError(
+        `Provider attempt ${attemptId} cannot be completed while it is ${attempt.state}`,
+      );
+    }
+    const adapter = this.#adapter(attempt.providerId);
+    if (!(adapter instanceof ManualProviderAdapter)) {
+      throw new ProviderConfigurationError(
+        `Provider attempt ${attemptId} is not a manual platform handoff`,
+      );
+    }
+    const outputs: ProviderOutput[] = [];
+    for (const [index, output] of input.outputs.entries()) {
+      const policy = OUTPUT_DOWNLOAD_POLICIES[output.kind];
+      const archived = await archiveLocalFile({
+        sourcePath: output.sourcePath,
+        destinationRoot: resolve(
+          this.#taskDirectory,
+          "manual",
+          attempt.providerId === "manual" ? "" : attempt.providerId,
+          "completed",
+          attempt.externalJobId,
+        ),
+        relativePath: `output-${String(index + 1).padStart(3, "0")}`,
+        archiveRoot: resolve(this.#taskDirectory, "provider-downloads", "archive"),
+        kind: output.kind,
+        allowedMimeTypes: policy.allowedMimeTypes,
+        maxBytes: this.#downloadMaxBytesByKind[output.kind] ?? policy.maxBytes,
+        ...(output.expectedSha256 ? { expectedSha256: output.expectedSha256 } : {}),
+      });
+      outputs.push(persistableOutputProjection(archived));
+    }
+    const result: ManualResultPackage = {
+      schemaVersion: 1,
+      jobId: attempt.externalJobId,
+      state: "succeeded",
+      outputs,
+      completedAt: this.#clock.now().toISOString(),
+    };
+    try {
+      await adapter.importResult(result);
+    } catch (error) {
+      if (!isAlreadyExists(error)) throw error;
+    }
+    return this.poll(attemptId);
+  }
+
   resumeCandidates(): Promise<readonly StoredProviderAttempt[]> {
     return this.#jobs.resumeCandidates();
   }
@@ -194,19 +263,34 @@ export class ProviderExecutionManager {
     const existing = this.#taskAdapters.get(providerId);
     if (existing) return existing;
     const configured = this.#registry.get(providerId);
-    if (configured.descriptor.adapter !== "manual") return configured;
+    if (configured instanceof LocalFfmpegProviderAdapter) {
+      const scoped = configured.forTask(this.#taskDirectory);
+      this.#taskAdapters.set(providerId, scoped);
+      return scoped;
+    }
+    if (!(configured instanceof ManualProviderAdapter)) return configured;
     const descriptor = configured.descriptor;
+    const providerSubdirectory = descriptor.id === "manual" ? "" : descriptor.id;
+    const manualRoot = resolve(this.#taskDirectory, "manual", providerSubdirectory);
     const scoped = new ManualProviderAdapter({
       id: descriptor.id,
       displayName: descriptor.displayName,
-      requestDirectory: resolve(this.#taskDirectory, "manual/requests"),
-      resultDirectory: resolve(this.#taskDirectory, "manual/results"),
+      requestDirectory: resolve(manualRoot, "requests"),
+      resultDirectory: resolve(manualRoot, "results"),
       capabilities: descriptor.capabilities,
       ...(descriptor.models ? { models: descriptor.models } : {}),
       clock: this.#clock,
       ...(descriptor.dataTransfer ? { dataTransfer: descriptor.dataTransfer } : {}),
       ...(descriptor.termsUrl ? { termsUrl: descriptor.termsUrl } : {}),
       ...(descriptor.privacyUrl ? { privacyUrl: descriptor.privacyUrl } : {}),
+      adapter: descriptor.adapter,
+      ...(typeof descriptor.metadata?.instructions === "string"
+        ? { instructions: descriptor.metadata.instructions }
+        : {}),
+      metadata: {
+        ...(descriptor.metadata ?? {}),
+        taskScoped: true,
+      },
     });
     this.#taskAdapters.set(providerId, scoped);
     return scoped;
@@ -527,4 +611,8 @@ function validateDownloadLimits(
       );
     }
   }
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "EEXIST";
 }

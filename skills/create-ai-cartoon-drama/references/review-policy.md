@@ -1,6 +1,6 @@
 # Review policy
 
-Every stage requires a recorded user decision. Silence, a tool success response, prior approval of another stage, or an agent's judgment is not approval.
+Strict mode requires a recorded user decision at every stage. Explicit quick mode requires user decisions at `storyboard` (G1-G3), `keyframes` (G4-G5), and `qc` (G6-G9); validated intermediate revisions receive distinct `quick-policy` events. Silence, a tool success response, or an agent's judgment is never approval.
 
 ## Review packet
 
@@ -25,12 +25,13 @@ Do not overwhelm the user with raw provider logs. Retain them in the task record
 
 Record actionable user wording without weakening it. Use `--targets` for shot IDs, character IDs, lines, files, or other specific scope. If feedback conflicts with the approved upstream contract, explain the invalidation and request confirmation before reopening upstream work.
 
+When importing artifacts with stable IDs, include `targetIds` for per-shot/per-asset files and `dependsOnIds` for contact sheets, proxy assemblies, timelines, and other aggregates. Scoped repair must copy forward unaffected immutable artifacts and rebuild only the dependency closure; visual-only keyframe or clip repair must not invalidate approved audio.
+
 ## Approval constraints
 
-- Never batch-approve multiple stages.
+- Never batch-approve stages in strict mode. In quick mode, use only the fixed bundles and expose every included revision at its checkpoint.
 - Never advance on a partial or ambiguous decision.
 - Never treat provider selection as creative approval.
 - Never overwrite an approved revision; create a traceable successor.
 - Never omit negative feedback, rejected variants, or regeneration lineage from the record.
 - Re-review every invalidated downstream stage.
-

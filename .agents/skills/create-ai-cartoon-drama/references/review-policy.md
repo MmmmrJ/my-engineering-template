@@ -1,6 +1,6 @@
 # Review policy
 
-Every stage requires a recorded user decision. Silence, a tool success response, prior approval of another stage, or an agent's judgment is not approval.
+Strict mode requires a recorded user decision at every stage. Explicit quick mode requires user decisions at `storyboard` (G1-G3), `keyframes` (G4-G5), and `qc` (G6-G9); validated intermediate revisions receive distinct `quick-policy` events. Silence, a tool success response, or an agent's judgment is never approval.
 
 ## Review packet
 
@@ -29,7 +29,7 @@ When importing artifacts with stable IDs, include `targetIds` for per-shot/per-a
 
 ## Approval constraints
 
-- Never batch-approve multiple stages.
+- Never batch-approve stages in strict mode. In quick mode, use only the fixed bundles and expose every included revision at its checkpoint.
 - Never advance on a partial or ambiguous decision.
 - Never treat provider selection as creative approval.
 - Never overwrite an approved revision; create a traceable successor.

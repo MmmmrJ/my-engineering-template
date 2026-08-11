@@ -14,7 +14,9 @@ import {
   REQUIRED_PROVIDER_CAPABILITIES,
   isProviderCapability,
   isReviewDecision,
+  isReviewMode,
   isWorkflowStage,
+  stageContractSchema,
 } from "../contracts/index.js";
 import {
   ProviderExecutionManager,
@@ -43,6 +45,7 @@ import {
 } from "./args.js";
 import { readImportMetadata } from "./metadata.js";
 import {
+  manualCompletionInputSchema,
   paidSubmitConfirmationSchema,
   providerEstimateRequestSchema,
   providerSubmitRequestSchema,
@@ -103,13 +106,21 @@ export async function runCli(
     switch (command) {
       case "start": {
         const args = parseArguments(argv.slice(1));
-        assertAllowedOptions(args, ["ip", "theme", "root", "json"]);
+        assertAllowedOptions(args, ["ip", "theme", "review-mode", "root", "json"]);
         assertPositionalCount(args, 0);
         const rootOption = option(args, "root");
+        const requestedReviewMode = option(args, "review-mode");
+        if (requestedReviewMode && !isReviewMode(requestedReviewMode)) {
+          throw new WorkflowError("USAGE", "--review-mode must be strict or quick.");
+        }
+        const reviewMode = requestedReviewMode && isReviewMode(requestedReviewMode)
+          ? requestedReviewMode
+          : undefined;
         const result = await (await getWorkflow()).createTask(
           {
             ip: option(args, "ip", { required: true }) as string,
             theme: option(args, "theme", { required: true }) as string,
+            ...(reviewMode ? { reviewMode } : {}),
           },
           rootOption ? resolve(cwd, rootOption) : undefined,
         );
@@ -144,6 +155,44 @@ export async function runCli(
           positional(args, 0, "task-id") as string,
         );
         writeResult(flag(args, "json"), result, formatResume(result), stdout);
+        return 0;
+      }
+      case "generate": {
+        const args = parseArguments(argv.slice(1));
+        assertAllowedOptions(args, [
+          "stage",
+          "metadata",
+          "rights",
+          "creator",
+          "declaration",
+          "evidence",
+          "source",
+          "jurisdiction",
+          "author-or-publication-facts",
+          "legal-basis",
+          "verified-at",
+          "json",
+        ]);
+        assertPositionalCount(args, 1);
+        const metadata = await readImportMetadata(option(args, "metadata"), cwd);
+        const requestedStage = option(args, "stage");
+        const stage = requestedStage ? requireStage(requestedStage) : undefined;
+        const rights = rightsFromArguments(args) ?? metadata.rights;
+        const result = await (await getWorkflow()).generateStage(
+          positional(args, 0, "task-id") as string,
+          {
+            ...(stage ? { stage: requireGeneratableStage(stage) } : {}),
+            ...(rights ? { rights } : {}),
+          },
+        );
+        writeResult(
+          flag(args, "json"),
+          result,
+          result.state.stages[result.stageContract.stage].status === "approved"
+            ? `Generated ${result.stageContract.stage}/${versionLabel(result.revision)}; accepted by quick policy and retained for bundle review.\n${result.reviewPacketPath}`
+            : `Generated ${result.stageContract.stage}/${versionLabel(result.revision)}; explicit review required.\n${result.reviewPacketPath}`,
+          stdout,
+        );
         return 0;
       }
       case "review": {
@@ -205,6 +254,7 @@ export async function runCli(
           "stage",
           "file",
           "metadata",
+          "contract",
           "rights",
           "creator",
           "declaration",
@@ -222,12 +272,28 @@ export async function runCli(
         const files = options(args, "file");
         if (files.length === 0) throw new WorkflowError("USAGE", "At least one --file is required.");
         const metadata = await readImportMetadata(option(args, "metadata"), cwd);
+        const stage = requireStage(option(args, "stage", { required: true }) as string);
+        const stageContract = option(args, "contract")
+          ? await readJsonFile(
+              option(args, "contract"),
+              cwd,
+              stageContractSchema,
+              "stage contract",
+            )
+          : metadata.stageContract;
+        if (!stageContract) {
+          throw new WorkflowError(
+            "STAGE_CONTRACT_INVALID",
+            "A structured stage contract is required via --contract or metadata.stageContract.",
+          );
+        }
         const rights = rightsFromArguments(args) ?? metadata.rights;
         const result = await (await getWorkflow()).importArtifact(
           positional(args, 0, "task-id") as string,
           {
-            stage: requireStage(option(args, "stage", { required: true }) as string),
+            stage,
             sourceFiles: files.map((path) => resolve(cwd, path)),
+            stageContract,
             ...(rights ? { rights } : {}),
             ...(metadata.provider ? { provider: metadata.provider } : {}),
             ...(metadata.aiLabel ? { aiLabel: metadata.aiLabel } : {}),
@@ -333,7 +399,7 @@ async function runProviders(
   if (!subcommand) {
     throw new WorkflowError(
       "USAGE",
-      "providers requires list, check, select, estimate, submit, resume-job, poll, cancel, or jobs.",
+      "providers requires list, check, select, estimate, submit, complete-manual, resume-job, poll, cancel, or jobs.",
     );
   }
   const args = parseArguments(argv.slice(1));
@@ -504,6 +570,37 @@ async function runProviders(
     );
     return 0;
   }
+  if (subcommand === "complete-manual") {
+    assertAllowedOptions(args, ["attempt", "result", "json"]);
+    assertPositionalCount(args, 1);
+    const task = positional(args, 0, "task-id") as string;
+    const attemptId = option(args, "attempt", { required: true }) as string;
+    const input = await readJsonFile(
+      option(args, "result"),
+      cwd,
+      manualCompletionInputSchema,
+      "manual completion result",
+    );
+    const workflowService = await getWorkflow();
+    await workflowService.getState(task);
+    const manager = new ProviderExecutionManager(
+      await getProviderRegistry(),
+      workflowService.resolveTaskDirectory(task),
+    );
+    const job = await manager.completeManual(attemptId, {
+      outputs: input.outputs.map((output) => ({
+        ...output,
+        sourcePath: resolve(cwd, output.sourcePath),
+      })),
+    });
+    writeResult(
+      flag(args, "json"),
+      job,
+      `Completed manual provider attempt ${attemptId}: ${job.state}. Run cartoon resume to import the archived output.`,
+      stdout,
+    );
+    return 0;
+  }
   if (subcommand === "poll" || subcommand === "cancel") {
     assertAllowedOptions(args, ["attempt", "json"]);
     assertPositionalCount(args, 1);
@@ -579,7 +676,7 @@ function selectionInputs(
       {
         capability: oneCapability,
         providerId: oneProvider,
-        mode: mode ?? "api",
+        mode: mode ?? (isManualProviderId(oneProvider) ? "manual" : "api"),
         ...(option(args, "model") ? { model: option(args, "model") } : {}),
         ...(option(args, "profile") ? { profile: option(args, "profile") } : {}),
         ...(auditMetadata ? { metadata: auditMetadata } : {}),
@@ -587,10 +684,16 @@ function selectionInputs(
     ];
   }
   if (oneProvider) {
+    if (oneProvider !== "manual" && isManualProviderId(oneProvider)) {
+      throw new WorkflowError(
+        "USAGE",
+        `Platform handoff ${oneProvider} covers selected capabilities only; use explicit --binding capability=${oneProvider}:manual entries in the complete frozen map.`,
+      );
+    }
     return REQUIRED_PROVIDER_CAPABILITIES.map((capability) => ({
       capability,
       providerId: oneProvider,
-      mode: mode ?? (oneProvider === "manual" ? "manual" : "api"),
+      mode: mode ?? (isManualProviderId(oneProvider) ? "manual" : "api"),
       ...(option(args, "model") ? { model: option(args, "model") } : {}),
       ...(option(args, "profile") ? { profile: option(args, "profile") } : {}),
       ...(auditMetadata ? { metadata: auditMetadata } : {}),
@@ -629,7 +732,7 @@ function parseBinding(value: string): SelectProviderInput {
   return {
     capability,
     providerId,
-    mode: parseMode(modeValue) ?? (providerId === "manual" ? "manual" : "api"),
+    mode: parseMode(modeValue) ?? (isManualProviderId(providerId) ? "manual" : "api"),
     ...(model ? { model } : {}),
     ...(profile ? { profile } : {}),
   };
@@ -639,6 +742,10 @@ function parseMode(value: string | undefined): "api" | "mcp" | "manual" | undefi
   if (!value) return undefined;
   if (value === "api" || value === "mcp" || value === "manual") return value;
   throw new WorkflowError("USAGE", `Unknown provider mode: ${value}`);
+}
+
+function isManualProviderId(providerId: string): boolean {
+  return providerId === "manual" || providerId.endsWith("-manual");
 }
 
 function rightsFromArguments(
@@ -675,6 +782,16 @@ function requireStage(value: string): WorkflowStage {
   return value;
 }
 
+function requireGeneratableStage(
+  stage: WorkflowStage,
+): "concept" | "script" | "storyboard" {
+  if (stage === "concept" || stage === "script" || stage === "storyboard") return stage;
+  throw new WorkflowError(
+    "GENERATOR_UNAVAILABLE",
+    "The default generator supports concept, script, and storyboard only.",
+  );
+}
+
 function writeResult(
   json: boolean,
   value: unknown,
@@ -693,10 +810,14 @@ function formatStatus(state: Awaited<ReturnType<WorkflowService["getState"]>>): 
 
 function formatResume(result: Awaited<ReturnType<WorkflowService["resume"]>>): string {
   switch (result.action.type) {
+    case "generate-stage":
+      return `Generate the structured ${result.action.stage} draft, then request review.`;
     case "work":
       return `Resume ${result.action.stage}: create or import its next revision.`;
     case "review":
-      return `Review required: ${result.action.stage}/${versionLabel(result.action.revision)}.`;
+      return result.action.bundle
+        ? `Bundle review required (${result.action.bundle.id}): ${result.action.bundle.stages.join(", ")}; checkpoint ${result.action.stage}/${versionLabel(result.action.revision)}.`
+        : `Review required: ${result.action.stage}/${versionLabel(result.action.revision)}.`;
     case "revise":
     case "regenerate":
       return `${result.action.type} ${result.action.stage} after ${versionLabel(result.action.previousRevision)}.`;
@@ -704,6 +825,12 @@ function formatResume(result: Awaited<ReturnType<WorkflowService["resume"]>>): s
       return `Provider selection required: ${result.action.missing.join(", ")}.`;
     case "replace-stale":
       return `Replace stale ${result.action.stage}; invalidated by ${result.action.target.kind}.`;
+    case "resume-provider-job":
+      return `Resume provider attempt ${result.action.attemptId} for ${result.action.stage}.`;
+    case "poll-provider-job":
+      return `Poll provider attempt ${result.action.attemptId} for ${result.action.stage}.`;
+    case "import-provider-output":
+      return `Import ${result.action.files.length} archived provider output(s) from ${result.action.attemptId} into ${result.action.stage}.`;
     case "export":
       return "All stages are approved; export is available.";
     case "stopped":
@@ -730,25 +857,28 @@ function formatProviderEstimate(estimate: ProviderEstimate): string {
 const HELP = `AI cartoon workflow
 
 Usage:
-  cartoon start --ip <name> --theme <theme> [--root <path>] [--json]
+  cartoon start --ip <name> --theme <theme> [--review-mode strict|quick] [--root <path>] [--json]
   cartoon status <task-id> [--json]
   cartoon resume <task-id> [--json]
+  cartoon generate <task-id> [--stage concept|script|storyboard] [--metadata @metadata.json] [--json]
   cartoon review <task-id> --stage <stage> [--revision vNNN] --decision <decision> [--feedback <text>] [--targets <ids>]
   cartoon providers list [--json]
   cartoon providers check [--provider <id>] [--json]
   cartoon providers select <task-id> [--provider <id> --mode api|mcp|manual] [--binding <capability=provider:mode>]
   cartoon providers estimate <task-id> --provider <id> --request @request.json [--json]
   cartoon providers submit <task-id> --provider <id> --stage <stage> --request @request.json --confirmation @confirmation.json [--json]
+  cartoon providers complete-manual <task-id> --attempt <attempt-id> --result @result.json [--json]
   cartoon providers resume-job <task-id> --attempt <attempt-id> --request @request.json [--json]
   cartoon providers poll|cancel <task-id> --attempt <attempt-id> [--json]
   cartoon providers jobs <task-id> [--json]
-  cartoon import <task-id> --stage <stage> --file <path> [--file <path>] --metadata @metadata.json
+  cartoon import <task-id> --stage <stage> --file <path> [--file <path>] --contract @stage-contract.json [--metadata @metadata.json]
     public-domain shortcut: --rights public-domain --source <source> --evidence <proof> --jurisdiction <place> --author-or-publication-facts <facts> --legal-basis <basis> --verified-at <ISO-time>
   cartoon export <task-id> [--output <path>] [--json]
   cartoon doctor [--json]
 
 Paid-submit confirmation JSON must declare either pricingStatus=known with the exact
 estimatedCost, or pricingStatus=unknown with unknownPricingAcknowledged=true and no estimatedCost.
+Review modes: strict (all 9 gates) or quick (explicit bundle gates at G3/G5/G9).
 Review decisions: approve, revise, regenerate, abort.`;
 
 const invokedAsScript = process.argv[1]

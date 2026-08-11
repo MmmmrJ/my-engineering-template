@@ -1,6 +1,7 @@
 import type { ArtifactRecord, StaleTarget } from "./artifacts.js";
-import type { ReviewDecision } from "./review.js";
+import type { ReviewActor, ReviewDecision, ReviewMode } from "./review.js";
 import type { ProviderCapability, WorkflowStage } from "./stages.js";
+import type { StageContract } from "./stage-contracts.js";
 
 export type StageStatus =
   | "pending"
@@ -19,6 +20,7 @@ export interface RevisionReview {
   targetIds?: readonly string[];
   eventId: string;
   at: string;
+  actor: ReviewActor;
 }
 
 export interface RevisionRequestRecord {
@@ -35,6 +37,8 @@ export interface RevisionRecord {
   artifactIds: readonly string[];
   summary?: string;
   targetIds?: readonly string[];
+  /** Validated, immutable structured contract for this exact revision. */
+  stageContract?: StageContract;
   createdAt: string;
   createdByEventId: string;
   review?: RevisionReview;
@@ -100,6 +104,10 @@ export interface TaskState {
   artifacts: Record<string, ArtifactRecord>;
   providers: Partial<Record<ProviderCapability, ProviderBinding>>;
   policies: {
+    review: {
+      mode: ReviewMode;
+      explicitCheckpoints: readonly WorkflowStage[];
+    };
     voiceClone: {
       defaultEnabled: false;
       consentRequired: true;
@@ -143,6 +151,10 @@ export interface ProjectManifest {
     };
   };
   policies: {
+    review: {
+      mode: ReviewMode;
+      explicitCheckpoints: readonly WorkflowStage[];
+    };
     voiceClone: {
       defaultEnabled: false;
       consentRequired: true;
@@ -151,8 +163,14 @@ export interface ProjectManifest {
 }
 
 export type ResumeAction =
+  | { type: "generate-stage"; stage: "concept" | "script" | "storyboard" }
   | { type: "work"; stage: WorkflowStage }
-  | { type: "review"; stage: WorkflowStage; revision: number }
+  | {
+      type: "review";
+      stage: WorkflowStage;
+      revision: number;
+      bundle?: { id: "creative" | "visual" | "delivery"; stages: readonly WorkflowStage[] };
+    }
   | {
       type: "revise" | "regenerate";
       stage: WorkflowStage;
@@ -160,6 +178,23 @@ export type ResumeAction =
     }
   | { type: "select-providers"; missing: readonly ProviderCapability[] }
   | { type: "replace-stale"; stage: WorkflowStage; target: StaleTarget }
+  | {
+      type: "resume-provider-job" | "poll-provider-job";
+      attemptId: string;
+      providerId: string;
+      capability: ProviderCapability;
+      stage: WorkflowStage;
+      state: "prepared" | "queued" | "running" | "failed_retryable";
+    }
+  | {
+      type: "import-provider-output";
+      attemptId: string;
+      providerId: string;
+      capability: ProviderCapability;
+      stage: WorkflowStage;
+      jobId?: string;
+      files: readonly string[];
+    }
   | { type: "export" }
   | { type: "stopped"; reason: "cancelled" | "failed" };
 

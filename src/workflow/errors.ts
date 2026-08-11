@@ -1,5 +1,7 @@
 export type WorkflowErrorCode =
   | "INVALID_INPUT"
+  | "STAGE_CONTRACT_INVALID"
+  | "GENERATOR_UNAVAILABLE"
   | "TASK_EXISTS"
   | "TASK_NOT_FOUND"
   | "EVENT_LOG_CORRUPT"
@@ -41,4 +43,3 @@ export function invariant(
     throw new WorkflowError("STATE_INVARIANT", message, details);
   }
 }
-

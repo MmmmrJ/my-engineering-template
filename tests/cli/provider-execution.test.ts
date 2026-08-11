@@ -42,6 +42,7 @@ describe("provider execution CLI", () => {
     registry = new ProviderRegistry([fakeAdapter()]);
     let sequence = 0;
     workflow = new WorkflowService({
+      legacyUnstructuredImportsForTests: true,
       defaultRoot: root,
       providerFacade: new ProviderRegistryFacade(registry),
       clock: () => new Date("2026-08-10T01:02:03.000Z"),
@@ -174,6 +175,7 @@ describe("provider execution CLI", () => {
     root = await mkdtemp(join(tmpdir(), "cartoon-provider-model-cli-"));
     let sequence = 500;
     workflow = new WorkflowService({
+      legacyUnstructuredImportsForTests: true,
       defaultRoot: root,
       providerFacade: new ProviderRegistryFacade(registry),
       clock: () => new Date("2026-08-10T01:02:03.000Z"),
@@ -292,6 +294,52 @@ describe("provider execution CLI", () => {
     ]);
   });
 
+  it("allows an assets contact-sheet render through the public provider-job CLI", async () => {
+    const requestPath = join(root, "contact-sheet-request.json");
+    await writeFile(
+      requestPath,
+      JSON.stringify({
+        capability: "render.timeline",
+        input: {
+          schemaVersion: 1,
+          contactSheet: {
+            inputPaths: ["04-assets/v001/character.png"],
+            outputPath: "04-assets/v001/contact-sheet.png",
+          },
+        },
+      }),
+      "utf8",
+    );
+    const confirmationPath = await writeConfirmation(root, {
+      estimatedCost: 0.2,
+      maximumCost: 0.25,
+    });
+
+    expect(
+      await runCli(
+        [
+          "providers",
+          "submit",
+          taskId,
+          "--provider",
+          "fake",
+          "--stage",
+          "assets",
+          "--request",
+          requestPath,
+          "--confirmation",
+          confirmationPath,
+          "--json",
+        ],
+        dependencies(),
+      ),
+    ).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({
+      job: { capability: "render.timeline", state: "queued" },
+    });
+    expect(submitCalls).toBe(1);
+  });
+
   it("resumes the exact failed request using the persisted confirmation", async () => {
     const requestPath = await writeRequest(root);
     const confirmationPath = await writeConfirmation(root, {
@@ -361,6 +409,7 @@ describe("provider execution CLI", () => {
     ]);
     let sequence = 100;
     workflow = new WorkflowService({
+      legacyUnstructuredImportsForTests: true,
       defaultRoot: root,
       providerFacade: new ProviderRegistryFacade(registry),
       clock: () => new Date("2026-08-10T01:02:03.000Z"),
@@ -422,6 +471,44 @@ describe("provider execution CLI", () => {
     ).toBe(0);
     expect(JSON.parse(stdout)).toMatchObject({ state: "queued" });
     expect((await workflow.getState(taskId)).stages.assets.status).toBe("pending");
+
+    const exportedImage = join(root, "manual-export.png");
+    const completionPath = join(root, "manual-completion.json");
+    await writeFile(
+      exportedImage,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    await writeFile(
+      completionPath,
+      JSON.stringify({ outputs: [{ kind: "image", sourcePath: exportedImage }] }),
+      "utf8",
+    );
+    stdout = "";
+    expect(
+      await runCli(
+        [
+          "providers",
+          "complete-manual",
+          taskId,
+          "--attempt",
+          submitted.attempt.attemptId,
+          "--result",
+          completionPath,
+          "--json",
+        ],
+        dependencies(),
+      ),
+    ).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({
+      state: "succeeded",
+      outputs: [{ kind: "image", mimeType: "image/png" }],
+    });
+    await expect(workflow.resume(taskId)).resolves.toMatchObject({
+      action: { type: "import-provider-output", attemptId: submitted.attempt.attemptId },
+    });
   });
 
   it("rejects recursive clone intent before the adapter is called without rejecting catalog voiceId", async () => {

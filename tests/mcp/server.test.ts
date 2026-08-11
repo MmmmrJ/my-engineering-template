@@ -30,8 +30,10 @@ describe("cartoon MCP server", () => {
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
       "cartoon_cancel_provider_job",
+      "cartoon_complete_manual_provider_job",
       "cartoon_estimate_provider_job",
       "cartoon_export",
+      "cartoon_generate_stage",
       "cartoon_import_artifact",
       "cartoon_list_artifacts",
       "cartoon_list_provider_jobs",
@@ -86,6 +88,66 @@ describe("cartoon MCP server", () => {
       },
     });
     expect(invalidRights.isError).toBe(true);
+
+    const generated = await client.callTool({
+      name: "cartoon_generate_stage",
+      arguments: {
+        taskId: created.taskDirectory,
+        rights: {
+          basis: "original",
+          creator: "Creator",
+          declaration: "I created and control this original IP.",
+        },
+      },
+    });
+    expect(generated.isError).not.toBe(true);
+    const generatedContent = firstContentBlock(generated.content);
+    if (
+      generatedContent === null ||
+      typeof generatedContent !== "object" ||
+      !("type" in generatedContent) ||
+      generatedContent.type !== "text" ||
+      !("text" in generatedContent) ||
+      typeof generatedContent.text !== "string"
+    ) {
+      throw new Error("Expected a text MCP generation result.");
+    }
+    expect(JSON.parse(generatedContent.text)).toMatchObject({
+      state: { stages: { concept: { status: "awaiting_review" } } },
+      stageContract: { stage: "concept" },
+    });
+  });
+
+  it("accepts quick review mode through the stable MCP start surface", async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), "cartoon-mcp-quick-"));
+    const server = await createCartoonMcpServer({ outputRoot });
+    const client = new Client({ name: "cartoon-test", version: "1.0.0" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    closeCallbacks.push(async () => {
+      await client.close();
+      await server.close();
+    });
+
+    const result = await client.callTool({
+      name: "cartoon_start",
+      arguments: { ip: "Lantern Town", theme: "Courage", reviewMode: "quick" },
+    });
+    const content = firstContentBlock(result.content);
+    if (
+      content === null ||
+      typeof content !== "object" ||
+      !("type" in content) ||
+      content.type !== "text" ||
+      !("text" in content) ||
+      typeof content.text !== "string"
+    ) {
+      throw new Error("Expected a text MCP result.");
+    }
+    expect(JSON.parse(content.text)).toMatchObject({
+      state: { policies: { review: { mode: "quick" } } },
+    });
   });
 });
 

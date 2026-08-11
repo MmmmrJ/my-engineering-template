@@ -9,7 +9,14 @@ import { AlibabaWanProviderAdapter } from "./alibaba-wan.js";
 import type { AlibabaWanProviderConfig, AlibabaWanRouteConfig } from "./alibaba-wan.js";
 import { ComfyUiProviderAdapter } from "./comfyui.js";
 import { HYPERFRAMES_DESCRIPTOR } from "./hyperframes.js";
+import { LocalFfmpegProviderAdapter } from "./local-ffmpeg.js";
 import { ManualProviderAdapter } from "./manual.js";
+import {
+  MANUAL_PLATFORM_ADAPTERS,
+  MANUAL_PLATFORM_PROFILES,
+  isManualPlatformAdapter,
+  type ManualPlatformAdapter,
+} from "./platform-manual.js";
 import {
   MINIMAX_OFFICIAL_MCP_OVERLAY_DESCRIPTOR,
   MiniMaxProviderAdapter,
@@ -35,7 +42,13 @@ import {
 interface ProviderConfigCommon {
   readonly id: string;
   readonly displayName?: string;
-  readonly adapter: "manual" | "minimax" | "alibaba-wan" | "comfyui";
+  readonly adapter:
+    | "manual"
+    | ManualPlatformAdapter
+    | "minimax"
+    | "alibaba-wan"
+    | "comfyui"
+    | "local-ffmpeg";
   readonly enabled?: boolean;
   readonly capabilities?: readonly ProviderCapability[];
   readonly models?: readonly ProviderModelDescriptor[];
@@ -48,9 +61,10 @@ interface ProviderConfigCommon {
 }
 
 interface ManualFileConfig extends ProviderConfigCommon {
-  readonly adapter: "manual";
+  readonly adapter: "manual" | ManualPlatformAdapter;
   readonly requestDirectory: string;
   readonly resultDirectory: string;
+  readonly instructions?: string;
 }
 
 interface MiniMaxFileConfig extends ProviderConfigCommon {
@@ -76,11 +90,19 @@ interface ComfyUiFileConfig extends ProviderConfigCommon {
   readonly workflowDirectory?: string;
 }
 
+interface LocalFfmpegFileConfig extends ProviderConfigCommon {
+  readonly adapter: "local-ffmpeg";
+  readonly ffmpegPath?: string;
+  readonly ffprobePath?: string;
+  readonly currency?: string;
+}
+
 type ProviderFileConfig =
   | ManualFileConfig
   | MiniMaxFileConfig
   | AlibabaFileConfig
-  | ComfyUiFileConfig;
+  | ComfyUiFileConfig
+  | LocalFfmpegFileConfig;
 
 export interface ProviderConfigFile {
   readonly schemaVersion: 1;
@@ -129,21 +151,39 @@ export async function loadProviderRegistry(
     }
     switch (entry.adapter) {
       case "manual":
+      case "jimeng-manual":
+      case "kling-manual":
+      case "liblib-manual":
+      case "jianying-manual": {
+        const profile = isManualPlatformAdapter(entry.adapter)
+          ? MANUAL_PLATFORM_PROFILES[entry.adapter]
+          : undefined;
         registry.register(
           new ManualProviderAdapter({
             id: entry.id,
-            displayName: entry.displayName ?? "Manual Import",
+            displayName: entry.displayName ?? profile?.displayName ?? "Manual Import",
             requestDirectory: resolve(baseDirectory, entry.requestDirectory),
             resultDirectory: resolve(baseDirectory, entry.resultDirectory),
-            capabilities: entry.capabilities ?? PROVIDER_CAPABILITIES,
+            capabilities: entry.capabilities ?? profile?.capabilities ?? PROVIDER_CAPABILITIES,
             ...(entry.models ? { models: entry.models } : {}),
             ...(entry.dataTransfer ? { dataTransfer: entry.dataTransfer } : {}),
             ...(entry.termsUrl ? { termsUrl: entry.termsUrl } : {}),
             ...(entry.privacyUrl ? { privacyUrl: entry.privacyUrl } : {}),
             ...(options.clock ? { clock: options.clock } : {}),
+            adapter: entry.adapter,
+            ...(entry.instructions ?? profile?.instructions
+              ? { instructions: entry.instructions ?? profile?.instructions }
+              : {}),
+            metadata: {
+              ...(profile?.metadata ?? {}),
+              ...(entry.instructions ?? profile?.instructions
+                ? { instructions: entry.instructions ?? profile?.instructions }
+                : {}),
+            },
           }),
         );
         break;
+      }
       case "minimax":
         registry.register(new MiniMaxProviderAdapter(miniMaxOptions(entry, options)));
         break;
@@ -169,6 +209,18 @@ export async function loadProviderRegistry(
             ...(entry.privacyUrl ? { privacyUrl: entry.privacyUrl } : {}),
             ...(options.environment ? { environment: options.environment } : {}),
             ...(options.fetch ? { fetch: options.fetch } : {}),
+            ...(options.clock ? { clock: options.clock } : {}),
+          }),
+        );
+        break;
+      case "local-ffmpeg":
+        registry.register(
+          new LocalFfmpegProviderAdapter({
+            id: entry.id,
+            displayName: entry.displayName ?? "Local FFmpeg",
+            ...(entry.ffmpegPath ? { ffmpegPath: entry.ffmpegPath } : {}),
+            ...(entry.ffprobePath ? { ffprobePath: entry.ffprobePath } : {}),
+            ...(entry.currency ? { currency: entry.currency } : {}),
             ...(options.clock ? { clock: options.clock } : {}),
           }),
         );
@@ -203,6 +255,7 @@ export class ProviderRegistryFacade implements ProviderFacade {
       capabilities: descriptor.capabilities,
       configured: this.#registry.hasAdapter(descriptor.id),
       metadata: {
+        ...(descriptor.metadata ?? {}),
         adapter: descriptor.adapter,
         optional: descriptor.optional ?? false,
         models: (descriptor.models ?? []) as unknown as JsonObject["models"],
@@ -313,7 +366,12 @@ function disabledDescriptor(entry: ProviderFileConfig): ProviderDescriptor {
     metadata: {
       enabled: false,
       ...(entry.adapter === "comfyui" && entry.workflowDirectory
-        ? { workflowDirectory: entry.workflowDirectory }
+        ? {
+            advancedLocalWorkflow: true,
+            workflowDirectory: entry.workflowDirectory,
+            workflowVersionPolicy:
+              "inline metadata.workflowVersion; file *.vNNN.json or JSON schemaVersion/workflowVersion",
+          }
         : {}),
     },
   };
@@ -321,10 +379,21 @@ function disabledDescriptor(entry: ProviderFileConfig): ProviderDescriptor {
 
 function inferCapabilities(entry: ProviderFileConfig): readonly ProviderCapability[] {
   if (entry.adapter === "manual") return PROVIDER_CAPABILITIES;
+  if (
+    entry.adapter === "jimeng-manual" ||
+    entry.adapter === "kling-manual" ||
+    entry.adapter === "liblib-manual" ||
+    entry.adapter === "jianying-manual"
+  ) {
+    return MANUAL_PLATFORM_PROFILES[entry.adapter].capabilities;
+  }
+  if (entry.adapter === "local-ffmpeg") return ["render.timeline", "quality.inspect"];
   if (entry.adapter === "comfyui") {
     return ["image.generate", "image.edit", "video.i2v", "video.r2v", "video.t2v"];
   }
-  return Object.keys(entry.routes ?? {}) as ProviderCapability[];
+  return "routes" in entry
+    ? Object.keys(entry.routes ?? {}) as ProviderCapability[]
+    : [];
 }
 
 function validateConfigFile(value: unknown): ProviderConfigFile {
@@ -346,7 +415,14 @@ function validateConfigFile(value: unknown): ProviderConfigFile {
     }
     if (ids.has(entry.id)) throw new ProviderConfigurationError(`Duplicate provider id ${entry.id}`);
     ids.add(entry.id);
-    if (!["manual", "minimax", "alibaba-wan", "comfyui"].includes(String(entry.adapter))) {
+    if (![
+      "manual",
+      ...MANUAL_PLATFORM_ADAPTERS,
+      "minimax",
+      "alibaba-wan",
+      "comfyui",
+      "local-ffmpeg",
+    ].includes(String(entry.adapter))) {
       throw new ProviderConfigurationError(
         `Provider ${entry.id} has unsupported adapter ${String(entry.adapter)}`,
       );
@@ -354,7 +430,7 @@ function validateConfigFile(value: unknown): ProviderConfigFile {
     if (entry.capabilities !== undefined) validateCapabilityList(entry.capabilities, entry.id);
     if (entry.routes !== undefined) validateRoutes(entry.routes, entry.id);
     validateTransferFields(entry, entry.id);
-    if (entry.adapter === "manual") {
+    if (entry.adapter === "manual" || isManualPlatformAdapter(String(entry.adapter))) {
       if (typeof entry.requestDirectory !== "string" || typeof entry.resultDirectory !== "string") {
         throw new ProviderConfigurationError(
           `Manual provider ${entry.id} needs requestDirectory and resultDirectory`,
@@ -365,6 +441,22 @@ function validateConfigFile(value: unknown): ProviderConfigFile {
       entry.workflowDirectory !== undefined &&
       typeof entry.workflowDirectory !== "string") {
       throw new ProviderConfigurationError(`ComfyUI provider ${entry.id} has invalid workflowDirectory`);
+    }
+    if (entry.adapter === "local-ffmpeg") {
+      for (const field of ["ffmpegPath", "ffprobePath"] as const) {
+        if (entry[field] !== undefined &&
+          (typeof entry[field] !== "string" || !String(entry[field]).trim())) {
+          throw new ProviderConfigurationError(
+            `Local FFmpeg provider ${entry.id} has invalid ${field}`,
+          );
+        }
+      }
+      if (entry.currency !== undefined &&
+        (typeof entry.currency !== "string" || !/^[A-Z]{3}$/.test(entry.currency))) {
+        throw new ProviderConfigurationError(
+          `Local FFmpeg provider ${entry.id} currency must be a three-letter upper-case code`,
+        );
+      }
     }
   }
   return value as ProviderConfigFile;
@@ -405,8 +497,9 @@ async function exists(path: string): Promise<boolean> {
 }
 
 function defaultDataTransfer(adapter: ProviderFileConfig["adapter"]): ProviderDataTransferMode {
-  if (adapter === "manual") return "user-managed";
+  if (adapter === "manual" || isManualPlatformAdapter(adapter)) return "user-managed";
   if (adapter === "comfyui") return "local-or-configured-remote";
+  if (adapter === "local-ffmpeg") return "local-only";
   return "external-cloud";
 }
 

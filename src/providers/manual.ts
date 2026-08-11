@@ -41,6 +41,10 @@ export interface ManualProviderConfig {
   readonly dataTransfer?: ProviderDataTransferMode;
   readonly termsUrl?: string;
   readonly privacyUrl?: string;
+  /** Distinguishes platform-specific handoff packages from the generic manual adapter. */
+  readonly adapter?: string;
+  readonly instructions?: string;
+  readonly metadata?: JsonObject;
 }
 
 export interface ManualRequestPackage {
@@ -74,24 +78,30 @@ export class ManualProviderAdapter implements ProviderAdapter {
   readonly #resultDirectory: string;
   readonly #clock: Clock;
   readonly #ids: IdGenerator;
+  readonly #instructions: string;
 
   constructor(config: ManualProviderConfig) {
     this.#requestDirectory = resolve(config.requestDirectory);
     this.#resultDirectory = resolve(config.resultDirectory);
     this.#clock = config.clock ?? systemClock;
     this.#ids = config.ids ?? uuidGenerator;
+    this.#instructions =
+      config.instructions ??
+      "Complete this request outside the workflow, then place a matching *.result.json package in the configured result directory.";
     this.descriptor = {
       id: config.id ?? "manual",
       displayName: config.displayName ?? "Manual Import",
-      adapter: "manual",
+      adapter: config.adapter ?? "manual",
       capabilities: config.capabilities ?? PROVIDER_CAPABILITIES,
       ...(config.models ? { models: config.models } : {}),
       dataTransfer: config.dataTransfer ?? "user-managed",
       ...(config.termsUrl ? { termsUrl: config.termsUrl } : {}),
       ...(config.privacyUrl ? { privacyUrl: config.privacyUrl } : {}),
       metadata: {
+        manualPackage: true,
         requestDirectory: this.#requestDirectory,
         resultDirectory: this.#resultDirectory,
+        ...(config.metadata ?? {}),
       },
     };
   }
@@ -152,8 +162,7 @@ export class ManualProviderAdapter implements ProviderAdapter {
       input: request.input,
       ...(request.metadata ? { metadata: request.metadata } : {}),
       createdAt: now,
-      instructions:
-        "Complete this request outside the workflow, then place a matching *.result.json package in the configured result directory.",
+      instructions: this.#instructions,
     };
     await writeFile(this.requestPath(remoteJobId), `${JSON.stringify(requestPackage, null, 2)}\n`, {
       encoding: "utf8",

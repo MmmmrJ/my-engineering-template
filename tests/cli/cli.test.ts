@@ -19,6 +19,7 @@ describe("cartoon CLI", () => {
     root = await mkdtemp(join(tmpdir(), "cartoon-cli-"));
     sequence = 0;
     workflow = new WorkflowService({
+      legacyUnstructuredImportsForTests: true,
       defaultRoot: root,
       clock: () => new Date("2026-08-10T01:02:03.000Z"),
       idGenerator: (prefix) => `${prefix}_${++sequence}`,
@@ -38,16 +39,14 @@ describe("cartoon CLI", () => {
     },
   });
 
-  it("starts from only IP/theme and imports G1 without inferring review", async () => {
+  it("starts from only IP/theme and generates structured G1 without inferring review", async () => {
     expect(
       await runCli(["start", "--ip", "Lantern Town", "--theme", "Courage", "--json"], dependencies()),
     ).toBe(0);
     const created = JSON.parse(stdout) as { manifest: { taskId: string }; taskDirectory: string };
     expect(created.manifest.taskId).toMatch(/^20260810-010203-lantern-town-/);
 
-    const artifact = join(root, "concept.md");
     const metadata = join(root, "metadata.json");
-    await writeFile(artifact, "# Concept\n", "utf8");
     await writeFile(
       metadata,
       JSON.stringify({
@@ -63,19 +62,15 @@ describe("cartoon CLI", () => {
     expect(
       await runCli(
         [
-          "import",
+          "generate",
           created.manifest.taskId,
-          "--stage",
-          "concept",
-          "--file",
-          artifact,
           "--metadata",
           `@${metadata}`,
         ],
         dependencies(),
       ),
     ).toBe(0);
-    expect(stdout).toContain("review required");
+    expect(stdout).toContain("explicit review required");
     const state = await workflow.getState(created.taskDirectory);
     expect(state.stages.concept.status).toBe("awaiting_review");
     expect(state.stages.script.status).toBe("pending");
@@ -94,20 +89,36 @@ describe("cartoon CLI", () => {
     expect(stderr).toContain("Choose providers explicitly");
   });
 
+  it("starts an explicit quick-review task without changing the strict default", async () => {
+    expect(
+      await runCli(
+        [
+          "start",
+          "--ip",
+          "Lantern Town",
+          "--theme",
+          "Courage",
+          "--review-mode",
+          "quick",
+          "--json",
+        ],
+        dependencies(),
+      ),
+    ).toBe(0);
+    const created = JSON.parse(stdout) as {
+      state: { policies: { review: { mode: string } } };
+    };
+    expect(created.state.policies.review.mode).toBe("quick");
+  });
+
   it("keeps the complete public-domain shortcut fail-closed", async () => {
     const created = await workflow.createTask({ ip: "Aesop fable", theme: "Honesty" });
-    const artifact = join(root, "concept.md");
-    await writeFile(artifact, "# Public-domain concept\n", "utf8");
 
     expect(
       await runCli(
         [
-          "import",
+          "generate",
           created.manifest.taskId,
-          "--stage",
-          "concept",
-          "--file",
-          artifact,
           "--rights",
           "public-domain",
           "--source",

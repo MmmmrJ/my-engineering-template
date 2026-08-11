@@ -5,8 +5,8 @@ This repository implements a serial, review-gated AI cartoon workflow. Keep chan
 ## Environment
 
 - Use Node.js 22 and npm.
-- Keep FFmpeg and `ffprobe` available on `PATH` for media validation/export.
-- Install with `npm ci`.
+- Install with `npm ci`; its optional managed packages provide portable FFmpeg and `ffprobe` by default.
+- System tools or `AI_CARTOON_FFMPEG_PATH` / `AI_CARTOON_FFPROBE_PATH` may override the managed tools. Use `npm ci --omit=optional` only when a trusted external toolchain is already available.
 - Before handoff, run `npm run check`; run `npm run cartoon -- doctor` when changing runtime or provider behavior.
 
 ## Production invariants
@@ -14,7 +14,7 @@ This repository implements a serial, review-gated AI cartoon workflow. Keep chan
 - Start every task with `--ip` and `--theme`.
 - Admit only user-controlled original IP or IP with recorded public-domain proof.
 - Run stages sequentially: `concept`, `script`, `storyboard`, `assets`, `keyframes`, `clips`, `audio`, `edit`, `qc`.
-- Require and record a user decision after every stage. Never infer, batch, or self-approve.
+- Default to `strict`, which requires a user decision after every stage. An explicitly created `quick` task may policy-approve only validated non-checkpoints and must stop for user bundle review at `storyboard`, `keyframes`, and `qc`; never infer approval from chat silence.
 - Apply all feedback to its recorded targets and create a new revision; approved revisions are immutable.
 - Check and freeze provider bindings after storyboard approval and before `assets` (G4).
 - Re-estimate every new provider submission and persist one strict confirmation: `known` pricing includes the exact `estimatedCost`; `unknown` pricing includes `unknownPricingAcknowledged: true` and no estimate. Polling or resuming the same durable job does not need another confirmation.
@@ -28,20 +28,22 @@ This repository implements a serial, review-gated AI cartoon workflow. Keep chan
 Use the CLI or its equivalent MCP operations. Do not edit `state.json`, ledgers, reviews, provider bindings, or approval flags by hand.
 
 ```powershell
-npm run cartoon -- start --ip "<ip>" --theme "<theme>"
+npm run cartoon -- start --ip "<ip>" --theme "<theme>" [--review-mode strict|quick]
 npm run cartoon -- status <task-id> [--json]
 npm run cartoon -- resume <task-id>
+npm run cartoon -- generate <task-id> [--stage concept|script|storyboard] [--metadata @metadata.json]
 npm run cartoon -- review <task-id> --stage <id> --decision approve|revise|regenerate|abort [--feedback "..."] [--targets "..."]
 npm run cartoon -- providers list
 npm run cartoon -- providers check
 npm run cartoon -- providers select <task-id> --provider manual --mode manual
 npm run cartoon -- providers estimate <task-id> --provider <id> --request @request.json [--json]
 npm run cartoon -- providers submit <task-id> --provider <id> --stage <id> --request @request.json --confirmation @confirmation.json [--json]
+npm run cartoon -- providers complete-manual <task-id> --attempt <attempt-id> --result @result.json [--json]
 npm run cartoon -- providers resume-job <task-id> --attempt <attempt-id> --request @request.json [--json]
 npm run cartoon -- providers poll <task-id> --attempt <attempt-id> [--json]
 npm run cartoon -- providers cancel <task-id> --attempt <attempt-id> [--json]
 npm run cartoon -- providers jobs <task-id> [--json]
-npm run cartoon -- import <task-id> --stage <id> --file <path> --metadata @metadata.json
+npm run cartoon -- import <task-id> --stage <id> --file <path> --contract @stage-contract.json --metadata @metadata.json
 npm run cartoon -- export <task-id>
 npm run cartoon -- doctor [--json]
 ```

@@ -1,6 +1,8 @@
 # Review policy
 
-Human review is a state transition, not a courtesy notification. Each of the nine stages requires its own explicit user decision on the exact current revision.
+Human review is a state transition, not a courtesy notification. `strict` is the compatibility default and requires an explicit user decision on all nine stages. `quick` must be explicitly selected at task creation and uses three user bundle checkpoints: `storyboard` reviews G1-G3, `keyframes` reviews G4-G5, and `qc` reviews G6-G9.
+
+In quick mode, every non-checkpoint revision still passes the same structured contract, rights, and dependency validation. The workflow then appends an immutable `review.recorded` event with actor `quick-policy`; it does not pretend the user approved it. `resume` names the complete bundle at each checkpoint, and the user may revise or regenerate any bundled stage. Legacy tasks and tasks without a mode are strict.
 
 ## Required review packet
 
@@ -26,7 +28,7 @@ Use `--feedback` for the user's actionable wording and `--targets` for the affec
 ## Non-negotiable rules
 
 - Do not infer approval from silence, enthusiasm, tool success, or prior-stage approval.
-- Do not batch-approve stages or let an agent/provider approve on the user's behalf.
+- In strict mode, do not batch-approve stages. In quick mode, only the declared policy may approve validated non-checkpoints; a provider or conversational agent cannot do so.
 - Do not advance while requested changes remain unapplied.
 - Do not overwrite the review history or omit rejected/regenerated lineage.
 - Do not change a frozen provider silently.

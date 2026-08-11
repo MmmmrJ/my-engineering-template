@@ -10,7 +10,9 @@ output/<task-id>/
 |-- state.json
 |-- events.jsonl
 |-- artifacts.jsonl
+|-- provider-jobs.jsonl
 |-- provider-bindings.json
+|-- generation/
 |-- reviews/
 |-- 01-concept/v001/
 |-- 02-script/v001/
@@ -32,7 +34,9 @@ The numbered stage directory names and order are stable. Revisions increase mono
 - `state.json`: current workflow projection used by `status` and `resume`.
 - `events.jsonl`: append-only state-transition and invalidation history.
 - `artifacts.jsonl`: append-only artifact inventory and provenance ledger.
+- `provider-jobs.jsonl`: append-only prepared/submitted/polled provider attempt ledger used by unified resume.
 - `provider-bindings.json`: checked provider/model selection frozen before G4.
+- `generation/`: durable baseline G1-G3 review packets before their immutable revision copies.
 - `reviews/`: stage/revision decisions, feedback, targets, and review evidence.
 
 Each artifact record contains its ID, type, relative path, SHA-256 hash, MIME type, byte size, source, stage and revision, provider/model/job identity, prompt hash and seed when applicable, rights/provenance, timestamps, and cost when known. Use these records instead of discovering artifacts by filename.
@@ -43,6 +47,7 @@ For selective repair, artifact metadata may declare stable `targetIds` (the shot
 
 - Keep artifacts in the directory for the stage that owns them.
 - Keep stable character, location, prop, shot, and revision IDs.
+- Persist one validated `schemaVersion: 1` stage contract on every revision; imports without it are rejected before review.
 - Never modify an approved revision. Write the replacement to the next revision directory and retain its lineage.
 - Record provider/tool, concrete model, request/resource ID, prompt/settings, source, checksum when available, and rights notes for generated or imported files.
 - Keep rejected candidates when needed to explain review/regeneration history; do not present them as approved.

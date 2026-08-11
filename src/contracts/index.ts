@@ -4,5 +4,6 @@ export * from "./events.js";
 export * from "./providers.js";
 export * from "./review.js";
 export * from "./stages.js";
+export * from "./stage-contracts.js";
 export * from "./state.js";
 export * from "./workflow.js";

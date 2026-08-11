@@ -2,6 +2,8 @@
 
 Meet the minimum contract below before requesting review. Keep stable character, location, prop, shot, and revision IDs across stages.
 
+Persist the matching `schemaVersion: 1` structured `stageContract` with every revision. The runtime validates required fields, stable-ID coverage, durations, upstream references, imported file names and file roles, automatic review/QC results, and blocking issues before it creates a reviewable revision. Primary asset, keyframe, clip, dialogue, music, and SFX entries must use distinct files; contact sheets, proxy assemblies, reports, subtitles, and timelines must use their declared media/document formats rather than reusing a primary file.
+
 ## `concept`
 
 - Identify the original or proven-public-domain IP and record its rights basis.
@@ -46,7 +48,7 @@ Meet the minimum contract below before requesting review. Keep stable character,
 ## `audio`
 
 - Supply dialogue/narration, music, SFX, timing, mix decisions, and `zh-CN` subtitle content.
-- Prefer synthetic catalog voices or recordings with documented rights. Voice cloning remains disabled unless the task contains separate, specific consent evidence and the user explicitly confirms that use.
+- Prefer synthetic catalog voices or recordings with documented rights. Voice cloning remains disabled unless the audio artifact is explicitly marked, contains the subject, scope, separate authorization evidence/time, and a later user-confirmation statement/time (plus review event ID when available).
 - Check pronunciation, intelligibility, loudness balance, sync, and music/SFX licenses.
 - Provide a dialogue/voice map, music and SFX cue sheet, and mixed preview.
 

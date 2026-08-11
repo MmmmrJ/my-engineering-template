@@ -1,18 +1,21 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { z } from "zod/v4";
 
 import type {
   AiLabelRecord,
   ImportArtifactInput,
   ProviderArtifactMetadata,
   RightsRecord,
+  StageContract,
   VoiceCloneConsentRecord,
 } from "../contracts/index.js";
-import { isProviderCapability } from "../contracts/index.js";
+import { isProviderCapability, stageContractSchema } from "../contracts/index.js";
 import { WorkflowError } from "../workflow/errors.js";
 import { assertNoResolvedCredentials, sha256Text } from "../workflow/util.js";
 
 export interface ImportMetadata {
+  stageContract?: StageContract;
   rights?: RightsRecord;
   provider?: ProviderArtifactMetadata;
   aiLabel?: AiLabelRecord;
@@ -44,6 +47,9 @@ export async function readImportMetadata(
   assertNoResolvedCredentials(record);
 
   return {
+    ...(record.stageContract !== undefined
+      ? { stageContract: parseStageContract(record.stageContract) }
+      : {}),
     ...(record.rights !== undefined ? { rights: parseRights(record.rights) } : {}),
     ...(record.provider ? { provider: parseProvider(record.provider) } : {}),
     ...(record.aiLabel ? { aiLabel: parseAiLabel(record.aiLabel) } : {}),
@@ -63,9 +69,10 @@ export async function readImportMetadata(
 
 export function importMetadataToInput(
   metadata: ImportMetadata,
-): Pick<
+): Partial<Pick<
   ImportArtifactInput,
   | "rights"
+  | "stageContract"
   | "provider"
   | "aiLabel"
   | "voiceCloneConsent"
@@ -75,8 +82,19 @@ export function importMetadataToInput(
   | "dependsOnIds"
   | "fileScopes"
   | "metadata"
-> {
+>> {
   return metadata;
+}
+
+function parseStageContract(value: unknown): StageContract {
+  const parsed = stageContractSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new WorkflowError(
+      "STAGE_CONTRACT_INVALID",
+      `metadata.stageContract is invalid: ${z.prettifyError(parsed.error)}`,
+    );
+  }
+  return parsed.data;
 }
 
 function parseRights(value: unknown): RightsRecord {

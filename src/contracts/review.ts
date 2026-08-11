@@ -1,8 +1,13 @@
 import type { WorkflowStage } from "./stages.js";
 
 export const REVIEW_DECISIONS = ["approve", "revise", "regenerate", "abort"] as const;
+export const REVIEW_MODES = ["strict", "quick"] as const;
 
 export type ReviewDecision = (typeof REVIEW_DECISIONS)[number];
+export type ReviewMode = (typeof REVIEW_MODES)[number];
+export type ReviewActor = "user" | "quick-policy";
+
+export const QUICK_REVIEW_CHECKPOINTS = ["storyboard", "keyframes", "qc"] as const satisfies readonly WorkflowStage[];
 
 export interface RevisionTarget {
   stage: WorkflowStage;
@@ -18,4 +23,8 @@ export interface ReviewInput {
 
 export function isReviewDecision(value: string): value is ReviewDecision {
   return (REVIEW_DECISIONS as readonly string[]).includes(value);
+}
+
+export function isReviewMode(value: string): value is ReviewMode {
+  return (REVIEW_MODES as readonly string[]).includes(value);
 }

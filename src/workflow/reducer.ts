@@ -8,6 +8,7 @@ import type {
   WorkflowEvent,
   WorkflowStage,
 } from "../contracts/index.js";
+import { QUICK_REVIEW_CHECKPOINTS } from "../contracts/index.js";
 import {
   REQUIRED_PROVIDER_CAPABILITIES,
   WORKFLOW_STAGES,
@@ -69,7 +70,14 @@ function createInitialState(event: Extract<WorkflowEvent, { type: "task.created"
     stages,
     artifacts: {},
     providers: {},
-    policies: { voiceClone: { defaultEnabled: false, consentRequired: true } },
+    policies: {
+      review: {
+        mode: event.reviewMode ?? "strict",
+        explicitCheckpoints:
+          event.reviewMode === "quick" ? [...QUICK_REVIEW_CHECKPOINTS] : [...WORKFLOW_STAGES],
+      },
+      voiceClone: { defaultEnabled: false, consentRequired: true },
+    },
     exports: [],
     eventsApplied: 0,
   };
@@ -111,6 +119,9 @@ function applyEvent(
         artifactIds: [...event.artifactIds],
         ...(event.summary ? { summary: event.summary } : {}),
         ...(event.targetIds?.length ? { targetIds: [...event.targetIds] } : {}),
+        ...(event.stageContract
+          ? { stageContract: structuredClone(event.stageContract) }
+          : {}),
         createdAt: event.at,
         createdByEventId: event.eventId,
       };
@@ -135,6 +146,7 @@ function applyEvent(
         ...(event.targetIds ? { targetIds: [...event.targetIds] } : {}),
         eventId: event.eventId,
         at: event.at,
+        actor: event.actor ?? "user",
       };
 
       if (event.decision === "approve") {

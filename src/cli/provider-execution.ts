@@ -14,6 +14,7 @@ import type {
   AttemptContext,
   JsonObject,
   JsonValue,
+  ManualCompletionInput,
   PaidSubmitConfirmation,
   ProviderEstimateRequest,
   ProviderSubmitRequest,
@@ -141,6 +142,30 @@ export const providerJobsMcpSchema = z
   .object({
     taskId: z.string().trim().min(1),
     resumableOnly: z.boolean().default(false),
+  })
+  .strict();
+
+export const manualCompletionInputSchema: z.ZodType<ManualCompletionInput> = z
+  .object({
+    outputs: z
+      .array(
+        z
+          .object({
+            kind: z.enum(["image", "video", "audio", "subtitle", "text", "json", "other"]),
+            sourcePath: z.string().trim().min(1),
+            expectedSha256: z.string().regex(/^[a-fA-F0-9]{64}$/).optional(),
+          })
+          .strict(),
+      )
+      .min(1),
+  })
+  .strict();
+
+export const manualCompletionMcpSchema = z
+  .object({
+    taskId: z.string().trim().min(1),
+    attemptId: z.string().uuid(),
+    result: manualCompletionInputSchema,
   })
   .strict();
 
@@ -390,9 +415,9 @@ function requireActionableStage(
 const STAGE_PROVIDER_CAPABILITIES: Readonly<
   Partial<Record<WorkflowStage, readonly ProviderCapability[]>>
 > = {
-  assets: ["image.generate", "image.edit"],
-  keyframes: ["image.generate", "image.edit"],
-  clips: ["video.i2v", "video.r2v", "video.t2v"],
+  assets: ["image.generate", "image.edit", "render.timeline"],
+  keyframes: ["image.generate", "image.edit", "render.timeline"],
+  clips: ["video.i2v", "video.r2v", "video.t2v", "render.timeline", "quality.inspect"],
   audio: ["audio.tts", "audio.music", "audio.sfx"],
   edit: ["speech.transcribe", "render.timeline"],
   qc: ["quality.inspect"],

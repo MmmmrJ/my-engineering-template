@@ -2,12 +2,14 @@ import { constants as fsConstants } from "node:fs";
 import {
   copyFile,
   mkdir,
+  open,
   readFile,
   rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
 import {
   basename,
   extname,
@@ -24,6 +26,8 @@ import type {
   CreateTaskInput,
   CreateTaskResult,
   ExportResult,
+  GenerateStageInput,
+  GenerateStageResult,
   ImportArtifactInput,
   ImportArtifactResult,
   ListArtifactsFilter,
@@ -39,6 +43,7 @@ import type {
   WorkflowEvent,
   WorkflowStage,
 } from "../contracts/index.js";
+import { QUICK_REVIEW_CHECKPOINTS, isReviewMode } from "../contracts/index.js";
 import {
   PROVIDER_CAPABILITIES,
   REQUIRED_PROVIDER_CAPABILITIES,
@@ -46,6 +51,7 @@ import {
   WORKFLOW_STAGES,
   dependentStages,
   isProviderCapability,
+  isWorkflowStage,
   stageIndex,
 } from "../contracts/stages.js";
 import {
@@ -53,9 +59,16 @@ import {
   type FinalDeliveryValidationInput,
   type FinalDeliveryValidationResult,
 } from "../media/index.js";
+import { detectMimeType, ProviderJobStore, type StoredProviderAttempt } from "../providers/index.js";
 import { WorkflowError, invariant } from "./errors.js";
 import { approvedArtifacts, missingProviders } from "./reducer.js";
 import { validateConceptRights, validateRightsRecord } from "./rights.js";
+import { validateStageContract } from "./stage-validator.js";
+import {
+  DefaultStageGenerator,
+  type GeneratableStage,
+  type StageGenerator,
+} from "./stage-generator.js";
 import { FileEventStore, TASK_FILES, pathExists, projectManifest } from "./store.js";
 import {
   type Clock,
@@ -80,6 +93,10 @@ export interface WorkflowServiceOptions {
   deliveryValidator?: (
     input: FinalDeliveryValidationInput,
   ) => Promise<FinalDeliveryValidationResult>;
+  providerJobReader?: (taskDirectory: string) => Promise<readonly StoredProviderAttempt[]>;
+  stageGenerator?: StageGenerator;
+  /** @internal Test-only compatibility for pre-contract unit fixtures. */
+  legacyUnstructuredImportsForTests?: boolean;
 }
 
 export class WorkflowService {
@@ -90,6 +107,11 @@ export class WorkflowService {
   private readonly deliveryValidator: (
     input: FinalDeliveryValidationInput,
   ) => Promise<FinalDeliveryValidationResult>;
+  private readonly providerJobReader: (
+    taskDirectory: string,
+  ) => Promise<readonly StoredProviderAttempt[]>;
+  private readonly stageGenerator: StageGenerator;
+  private readonly legacyUnstructuredImportsForTests: boolean;
 
   constructor(options: WorkflowServiceOptions = {}) {
     this.defaultRoot = resolve(
@@ -99,9 +121,24 @@ export class WorkflowService {
     this.idGenerator = options.idGenerator ?? randomId;
     this.providerFacade = options.providerFacade;
     this.deliveryValidator = options.deliveryValidator ?? validateFinalDelivery;
+    this.providerJobReader =
+      options.providerJobReader ??
+      (async (taskDirectory) => new ProviderJobStore(taskDirectory).list());
+    this.stageGenerator = options.stageGenerator ?? new DefaultStageGenerator();
+    if (options.legacyUnstructuredImportsForTests && process.env.NODE_ENV !== "test") {
+      throw new WorkflowError(
+        "INVALID_INPUT",
+        "Legacy unstructured imports may only be enabled by the test runner.",
+      );
+    }
+    this.legacyUnstructuredImportsForTests =
+      options.legacyUnstructuredImportsForTests === true;
   }
 
   async createTask(input: CreateTaskInput, root = this.defaultRoot): Promise<CreateTaskResult> {
+    if (input.reviewMode !== undefined && !isReviewMode(input.reviewMode)) {
+      throw new WorkflowError("INVALID_INPUT", "Review mode must be strict or quick.");
+    }
     const normalizedInput = {
       ip: cleanText(input.ip, "ip"),
       theme: cleanText(input.theme, "theme"),
@@ -115,6 +152,7 @@ export class WorkflowService {
       at: createdAt,
       taskId,
       input: normalizedInput,
+      ...(input.reviewMode ? { reviewMode: input.reviewMode } : {}),
     };
     const state = await new FileEventStore(taskDirectory).initialize(event);
     return { taskDirectory, manifest: projectManifest(event), state };
@@ -125,7 +163,8 @@ export class WorkflowService {
   }
 
   async resume(task: string): Promise<ResumeResult> {
-    const state = await this.getState(task);
+    const taskDirectory = this.resolveTaskDirectory(task);
+    const state = await new FileEventStore(taskDirectory).getState();
     if (state.status === "cancelled" || state.status === "failed") {
       return {
         taskId: state.taskId,
@@ -152,7 +191,14 @@ export class WorkflowService {
       return {
         taskId: state.taskId,
         status: state.status,
-        action: { type: "review", stage: activeStage, revision: stage.currentRevision },
+        action: {
+          type: "review",
+          stage: activeStage,
+          revision: stage.currentRevision,
+          ...(state.policies.review.mode === "quick"
+            ? { bundle: quickReviewBundle(activeStage) }
+            : {}),
+        },
       };
     }
     if (stage.status === "revision_requested") {
@@ -175,11 +221,153 @@ export class WorkflowService {
         action: { type: "replace-stale", stage: activeStage, target: stage.stale },
       };
     }
+    const providerAction = await this.providerResumeAction(taskDirectory, state, activeStage);
+    if (providerAction) {
+      return { taskId: state.taskId, status: state.status, action: providerAction };
+    }
+    if (
+      stage.status === "pending" &&
+      (activeStage === "concept" || activeStage === "script" || activeStage === "storyboard")
+    ) {
+      return {
+        taskId: state.taskId,
+        status: state.status,
+        action: { type: "generate-stage", stage: activeStage },
+      };
+    }
     return {
       taskId: state.taskId,
       status: state.status,
       action: { type: "work", stage: activeStage },
     };
+  }
+
+  async generateStage(task: string, input: GenerateStageInput = {}): Promise<GenerateStageResult> {
+    const taskDirectory = this.resolveTaskDirectory(task);
+    const state = await new FileEventStore(taskDirectory).getState();
+    const stage = input.stage ?? state.activeStage;
+    if (!stage || !isGeneratableStage(stage)) {
+      throw new WorkflowError(
+        "GENERATOR_UNAVAILABLE",
+        "The default generator supports concept, script, and storyboard; media stages require a frozen provider or manual import.",
+      );
+    }
+    if (state.activeStage !== stage) {
+      throw new WorkflowError(
+        "INVALID_TRANSITION",
+        `${stage} is not the current actionable stage.`,
+      );
+    }
+    if (stage === "concept") {
+      validateConceptRights(input.rights);
+    }
+    const stageState = state.stages[stage];
+    if (stageState.status === "awaiting_review" || stageState.status === "approved") {
+      throw new WorkflowError(
+        "REVIEW_REQUIRED",
+        `${stage} cannot be generated while its current revision is ${stageState.status}.`,
+      );
+    }
+    const currentRevision = stageState.currentRevision
+      ? stageState.revisions[stageState.currentRevision - 1]
+      : undefined;
+    const feedback =
+      currentRevision?.changeRequests?.at(-1)?.feedback ??
+      (currentRevision?.review?.decision === "revise" ||
+      currentRevision?.review?.decision === "regenerate"
+        ? currentRevision.review.feedback
+        : undefined);
+    const generatedAt = this.now();
+    const draft = await this.stageGenerator.generate({
+      state,
+      stage,
+      generatedAt,
+      ...(feedback ? { feedback } : {}),
+    });
+    const generationDirectory = join(taskDirectory, "generation", stage);
+    await mkdir(generationDirectory, { recursive: true });
+    const sourcePath = join(
+      generationDirectory,
+      `${versionLabel(stageState.revisions.length + 1)}-${safeIdentifier(this.idGenerator("draft"))}-review.md`,
+    );
+    await writeFile(sourcePath, draft.reviewPacketMarkdown, { encoding: "utf8", flag: "wx" });
+    const imported = await this.importArtifact(taskDirectory, {
+      stage,
+      sourceFiles: [sourcePath],
+      stageContract: draft.contract,
+      summary: draft.summary,
+      ...(input.rights ? { rights: input.rights } : {}),
+    });
+    const generatedArtifact = imported.artifacts.find(
+      (artifact) => artifact.provenance.source.sourceUri === sourcePath,
+    ) ?? imported.artifacts[0];
+    invariant(generatedArtifact, "Generated revision did not retain its review packet.");
+    return {
+      ...imported,
+      reviewPacketPath: resolveTaskPath(taskDirectory, generatedArtifact.relativePath),
+      stageContract: draft.contract,
+    };
+  }
+
+  private async providerResumeAction(
+    taskDirectory: string,
+    state: TaskState,
+    activeStage: WorkflowStage,
+  ): Promise<ResumeResult["action"] | undefined> {
+    const attempts = (await this.providerJobReader(taskDirectory))
+      .filter((attempt) => attempt.stage === activeStage && isWorkflowStage(attempt.stage))
+      .sort((left, right) => left.preparedAt.localeCompare(right.preparedAt));
+    for (const attempt of attempts) {
+      if (
+        attempt.state === "succeeded" &&
+        attempt.outputs?.some((output) => output.localPath || output.archivedPath) &&
+        !Object.values(state.artifacts).some(
+          (artifact) =>
+            artifact.jobId === attempt.externalJobId ||
+            artifact.provenance.metadata?.providerAttemptId === attempt.attemptId,
+        )
+      ) {
+        return {
+          type: "import-provider-output",
+          attemptId: attempt.attemptId,
+          providerId: attempt.providerId,
+          capability: attempt.capability,
+          stage: activeStage,
+          ...(attempt.externalJobId ? { jobId: attempt.externalJobId } : {}),
+          files: attempt.outputs.flatMap((output) =>
+            output.localPath ? [output.localPath] : output.archivedPath ? [output.archivedPath] : [],
+          ),
+        };
+      }
+      if (
+        (attempt.state === "prepared" || attempt.state === "failed_retryable") &&
+        !attempt.externalJobId
+      ) {
+        return {
+          type: "resume-provider-job",
+          attemptId: attempt.attemptId,
+          providerId: attempt.providerId,
+          capability: attempt.capability,
+          stage: activeStage,
+          state: attempt.state,
+        };
+      }
+      if (
+        attempt.state === "queued" ||
+        attempt.state === "running" ||
+        (attempt.state === "failed_retryable" && attempt.externalJobId)
+      ) {
+        return {
+          type: "poll-provider-job",
+          attemptId: attempt.attemptId,
+          providerId: attempt.providerId,
+          capability: attempt.capability,
+          stage: activeStage,
+          state: attempt.state,
+        };
+      }
+    }
+    return undefined;
   }
 
   async importArtifact(task: string, input: ImportArtifactInput): Promise<ImportArtifactResult> {
@@ -189,6 +377,7 @@ export class WorkflowService {
       throw new WorkflowError("INVALID_INPUT", "At least one source file is required.");
     }
     const sourceFiles = input.sourceFiles.map((path) => resolve(cleanText(path, "sourceFiles")));
+    await Promise.all(sourceFiles.map(validateSourceFileSignature));
     const defaultTargetIds = normalizeIds(input.targetIds, "targetIds");
     const defaultDependsOnIds = normalizeIds(input.dependsOnIds, "dependsOnIds");
     const fileScopes = normalizeFileScopes(input.fileScopes);
@@ -255,6 +444,32 @@ export class WorkflowService {
       }
 
       const stage = state.stages[input.stage];
+      const replacementTargetIds = requestedTargetIds(stage);
+      const previousRevision = stage.currentRevision
+        ? stage.revisions[stage.currentRevision - 1]
+        : undefined;
+      const carriedFileNames = previousRevision && replacementTargetIds?.length
+        ? previousRevision.artifactIds.flatMap((artifactId) => {
+            const artifact = state.artifacts[artifactId];
+            if (!artifact || isArtifactAffected(artifact, replacementTargetIds)) return [];
+            return [artifact.fileName.replace(/^\d+-/, "")];
+          })
+        : [];
+      const stageContract = input.stageContract
+        ? validateStageContract({
+            stage: input.stage,
+            contract: input.stageContract,
+            state,
+            sourceFiles: [...sourceFiles, ...carriedFileNames],
+          })
+        : this.legacyUnstructuredImportsForTests
+          ? undefined
+          : (() => {
+              throw new WorkflowError(
+                "STAGE_CONTRACT_INVALID",
+                `A structured ${input.stage} stage contract is required.`,
+              );
+            })();
       const revision = stage.revisions.length + 1;
       if (revision > 999) {
         throw new WorkflowError("INVALID_TRANSITION", `${input.stage} has reached v999.`);
@@ -321,10 +536,6 @@ export class WorkflowService {
         });
       }
 
-      const replacementTargetIds = requestedTargetIds(stage);
-      const previousRevision = stage.currentRevision
-        ? stage.revisions[stage.currentRevision - 1]
-        : undefined;
       if (previousRevision && replacementTargetIds?.length) {
         for (const previousArtifactId of previousRevision.artifactIds) {
           const previous = state.artifacts[previousArtifactId];
@@ -372,8 +583,23 @@ export class WorkflowService {
             : defaultTargetIds?.length
               ? { targetIds: defaultTargetIds }
               : {}),
+          ...(stageContract ? { stageContract } : {}),
         }),
       );
+      if (
+        state.policies.review.mode === "quick" &&
+        !QUICK_REVIEW_CHECKPOINTS.includes(input.stage as (typeof QUICK_REVIEW_CHECKPOINTS)[number])
+      ) {
+        events.push(
+          this.event({
+            type: "review.recorded",
+            target: { stage: input.stage, revision },
+            decision: "approve",
+            actor: "quick-policy",
+            feedback: "Structured contract accepted by quick review policy; retained for bundle review.",
+          }),
+        );
+      }
       return { events, result: { revision, artifacts } };
     });
 
@@ -397,6 +623,16 @@ export class WorkflowService {
       const revision = stage.revisions[input.target.revision - 1];
       if (!revision) {
         throw new WorkflowError("INVALID_TRANSITION", "Review target does not exist.");
+      }
+      if (
+        input.decision === "approve" &&
+        !revision.stageContract &&
+        !this.legacyUnstructuredImportsForTests
+      ) {
+        throw new WorkflowError(
+          "STAGE_CONTRACT_INVALID",
+          `${input.target.stage}/${versionLabel(input.target.revision)} has no structured stage contract; request a new revision before approval.`,
+        );
       }
       if (input.target.stage === "concept") {
         for (const artifactId of revision.artifactIds) {
@@ -430,6 +666,7 @@ export class WorkflowService {
           type: "review.recorded",
           target: { ...input.target },
           decision: input.decision,
+          actor: "user",
           ...(feedback ? { feedback } : {}),
           ...(normalizedTargets ? { targetIds: normalizedTargets } : {}),
         });
@@ -490,7 +727,7 @@ export class WorkflowService {
       if (mode !== "api" && mode !== "mcp" && mode !== "manual") {
         throw new WorkflowError("INVALID_INPUT", `Unknown provider binding mode: ${String(mode)}`);
       }
-      if (mode === "api") {
+      if (mode === "api" || mode === "manual") {
         const snapshot = await this.validateProvider(input.capability, input.providerId);
         selections.push({
           ...input,
@@ -506,9 +743,21 @@ export class WorkflowService {
         });
       } else if (mode === "mcp") {
         assertMcpBindingEvidence(input);
-        selections.push({ ...input, mode });
-      } else {
-        selections.push({ ...input, mode });
+        const descriptor = await this.validateMcpProvider(input);
+        selections.push({
+          ...input,
+          mode,
+          metadata: {
+            ...(descriptor?.metadata ?? {}),
+            ...(input.metadata ?? {}),
+            ...(descriptor
+              ? {
+                  providerName: descriptor.name ?? descriptor.id,
+                  configured: descriptor.configured ?? false,
+                }
+              : {}),
+          },
+        });
       }
     }
 
@@ -683,6 +932,7 @@ export class WorkflowService {
               stage,
               state.stages[stage].revisions.map((revision) => ({
                 version: revision.version,
+                ...(revision.stageContract ? { stageContract: revision.stageContract } : {}),
                 ...(revision.review ? { review: revision.review } : {}),
                 ...(revision.changeRequests ? { changeRequests: revision.changeRequests } : {}),
                 ...(revision.stale ? { stale: revision.stale } : {}),
@@ -760,7 +1010,7 @@ export class WorkflowService {
     if (!this.providerFacade) {
       throw new WorkflowError(
         "PROVIDER_UNAVAILABLE",
-        "No provider facade is configured. Use a manual binding or inject a provider facade.",
+        "No provider facade is configured; API and manual bindings must resolve to a configured provider.",
       );
     }
     const descriptor = (await this.providerFacade.list()).find((provider) => provider.id === providerId);
@@ -779,6 +1029,34 @@ export class WorkflowService {
       );
     }
     return { descriptor, health: selected };
+  }
+
+  private async validateMcpProvider(
+    input: SelectProviderInput,
+  ): Promise<Awaited<ReturnType<ProviderFacade["list"]>>[number] | undefined> {
+    const descriptors = this.providerFacade ? await this.providerFacade.list() : [];
+    const descriptor = descriptors.find((provider) => provider.id === input.providerId);
+    if (descriptor) {
+      if (!descriptor.capabilities.includes(input.capability)) {
+        throw new WorkflowError(
+          "PROVIDER_UNAVAILABLE",
+          `${input.providerId} does not expose ${input.capability}.`,
+        );
+      }
+      return descriptor;
+    }
+    const discovered = input.metadata?.discoveredCapabilities;
+    if (
+      !Array.isArray(discovered) ||
+      !discovered.every((value) => typeof value === "string" && isProviderCapability(value)) ||
+      !discovered.includes(input.capability)
+    ) {
+      throw new WorkflowError(
+        "PROVIDER_UNAVAILABLE",
+        `Unknown MCP provider ${input.providerId} must include metadata.discoveredCapabilities containing ${input.capability}.`,
+      );
+    }
+    return undefined;
   }
 }
 
@@ -1251,6 +1529,9 @@ async function statFile(path: string): Promise<{ size: number }> {
     if (!details.isFile()) {
       throw new WorkflowError("ARTIFACT_NOT_FOUND", `Artifact source is not a file: ${path}`);
     }
+    if (details.size === 0) {
+      throw new WorkflowError("ARTIFACT_NOT_FOUND", `Artifact source is empty: ${path}`);
+    }
     return { size: details.size };
   } catch (error) {
     if (error instanceof WorkflowError) throw error;
@@ -1316,10 +1597,41 @@ function inferMediaType(path: string): string {
     ".webp": "image/webp",
     ".wav": "audio/wav",
     ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
     ".mp4": "video/mp4",
+    ".webm": "video/webm",
     ".mov": "video/quicktime",
   };
   return mediaTypes[extname(path).toLowerCase()] ?? "application/octet-stream";
+}
+
+async function validateSourceFileSignature(path: string): Promise<void> {
+  const expected = inferMediaType(path);
+  if (!/^(?:image|audio|video)\//.test(expected)) return;
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, "r");
+    const bytes = Buffer.alloc(32);
+    const result = await handle.read(bytes, 0, bytes.length, 0);
+    const detected = detectMimeType(bytes.subarray(0, result.bytesRead));
+    const equivalent =
+      detected === expected ||
+      (detected === "video/mp4" && (expected === "video/quicktime" || expected === "audio/mp4"));
+    if (!equivalent) {
+      throw new WorkflowError(
+        "STAGE_CONTRACT_INVALID",
+        `Artifact ${basename(path)} signature ${detected ?? "unknown"} does not match ${expected}.`,
+      );
+    }
+  } catch (error) {
+    if (error instanceof WorkflowError) throw error;
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+    throw error;
+  } finally {
+    await handle?.close();
+  }
 }
 
 function resolveTaskPath(taskDirectory: string, relativePath: string): string {
@@ -1333,6 +1645,26 @@ function resolveTaskPath(taskDirectory: string, relativePath: string): string {
 
 export const REQUIRED_BINDINGS = REQUIRED_PROVIDER_CAPABILITIES;
 export const ALL_PROVIDER_CAPABILITIES = PROVIDER_CAPABILITIES;
+
+function quickReviewBundle(stage: WorkflowStage): {
+  id: "creative" | "visual" | "delivery";
+  stages: readonly WorkflowStage[];
+} {
+  if (stage === "storyboard") {
+    return { id: "creative", stages: ["concept", "script", "storyboard"] };
+  }
+  if (stage === "keyframes") {
+    return { id: "visual", stages: ["assets", "keyframes"] };
+  }
+  if (stage === "qc") {
+    return { id: "delivery", stages: ["clips", "audio", "edit", "qc"] };
+  }
+  throw new WorkflowError("STATE_INVARIANT", `${stage} is not a quick-review checkpoint.`);
+}
+
+function isGeneratableStage(stage: WorkflowStage): stage is GeneratableStage {
+  return stage === "concept" || stage === "script" || stage === "storyboard";
+}
 
 function assertMcpBindingEvidence(input: SelectProviderInput): void {
   const checkedAt = input.metadata?.checkedAt;

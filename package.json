@@ -28,6 +28,10 @@
     "@modelcontextprotocol/sdk": "1.30.0",
     "zod": "4.4.3"
   },
+  "optionalDependencies": {
+    "@derhuerst/ffprobe-static": "5.3.0",
+    "ffmpeg-static": "5.3.0"
+  },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "22.20.1",

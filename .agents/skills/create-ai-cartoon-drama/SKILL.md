@@ -5,7 +5,7 @@ description: Create, resume, review, and export a short AI cartoon drama through
 
 # Create AI Cartoon Drama
 
-Run one durable, sequential production. Do not create runtime subagents, skip a review, infer approval, or place generated media outside the task workspace.
+Run one durable, sequential production. Do not create runtime subagents, infer approval, or place generated media outside the task workspace. Strict review is the default; quick review is allowed only when explicitly selected and still stops at its three declared bundle checkpoints.
 
 ## Prepare
 
@@ -21,6 +21,7 @@ Start with the two required creative inputs:
 
 ```powershell
 npm run cartoon -- start --ip "<original-or-public-domain-ip>" --theme "<theme>"
+npm run cartoon -- start --ip "<original-or-public-domain-ip>" --theme "<theme>" --review-mode quick
 ```
 
 Capture the returned task ID. Inspect an existing task with:
@@ -32,15 +33,23 @@ npm run cartoon -- resume <task-id>
 
 Treat the task state and task folder as the production record. Never edit state files to force a transition.
 
+For G1-G3, use the built-in validated baseline generator unless the user supplied a complete replacement contract:
+
+```powershell
+npm run cartoon -- generate <task-id>
+```
+
+G1 generation still requires original-work or public-domain rights metadata. Strict generation creates a revision awaiting review. Quick generation records `quick-policy` decisions for validated non-checkpoints and pauses for user bundle review at `storyboard`, `keyframes`, and `qc`.
+
 ## Execute every stage
 
 For `concept`, `script`, `storyboard`, `assets`, `keyframes`, `clips`, `audio`, `edit`, then `qc`:
 
 1. Inspect status and the approved upstream artifacts.
-2. Produce only the current stage's contract. For external generation, use a configured direct API first, MCP second, or a durable manual import last.
+2. Produce only the current stage's structured contract. Every imported revision must include `stageContract` metadata or `--contract @stage-contract.json`; a file without a validated contract is not reviewable. For external generation, use a configured direct API first, MCP second, or a durable manual import last.
 3. Preserve prompts, provider/model identifiers, request IDs, source paths, rights notes, and relevant settings with the artifact.
-4. Present a compact review packet containing the artifact, evidence, risks, and exact decision choices.
-5. Wait for the user's explicit `approve`, `revise`, `regenerate`, or `abort` decision.
+4. In strict mode, present a compact review packet for this stage. In quick mode, retain it and present the complete G1-G3, G4-G5, or G6-G9 packet at the declared checkpoint.
+5. At an applicable user checkpoint, wait for the user's explicit `approve`, `revise`, `regenerate`, or `abort` decision.
 6. Record the decision and all feedback through the CLI; never summarize away actionable feedback.
 7. Resume only after the recorded decision permits it.
 
@@ -54,7 +63,7 @@ Before G4 (`assets`), run provider `list`, `check`, and `select`. Selection free
 Import externally created artifacts through the CLI so they remain recoverable:
 
 ```powershell
-npm run cartoon -- import <task-id> --stage <stage-id> --file <path> --metadata @metadata.json
+npm run cartoon -- import <task-id> --stage <stage-id> --file <path> --contract @stage-contract.json --metadata @metadata.json
 ```
 
 ## Finish

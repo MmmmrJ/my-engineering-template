@@ -1,7 +1,7 @@
 {
   "name": "ai-cartoon-workflow",
   "version": "1.0.0",
-  "description": "Create an AI cartoon drama through a resumable workflow with mandatory user review gates.",
+  "description": "Create an AI cartoon drama through a resumable strict or quick-review workflow.",
   "author": {
     "name": "AI Cartoon Workflow Template Contributors"
   },
@@ -12,7 +12,7 @@
   "interface": {
     "displayName": "AI Cartoon Workflow",
     "shortDescription": "Produce reviewed AI cartoon dramas from an IP and theme.",
-    "longDescription": "A serial, resumable production workflow for concept, script, storyboard, assets, keyframes, video, audio, editing, subtitles, quality control, and final approval.",
+    "longDescription": "A serial, resumable production workflow with strict nine-gate or quick three-bundle review, platform handoffs, versioned media artifacts, quality control, and final approval.",
     "developerName": "AI Cartoon Workflow Template Contributors",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],

@@ -1,11 +1,61 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { doctorMediaTools, normalizeProbe, probeMedia } from "../../src/media/ffmpeg.js";
+import {
+  doctorMediaTools,
+  normalizeProbe,
+  probeMedia,
+  resolveFfmpegToolchain,
+} from "../../src/media/ffmpeg.js";
 import type { ProcessRunner } from "../../src/media/process.js";
 
 const probeFixtureUrl = new URL("../fixtures/ffprobe-video.json", import.meta.url);
 
 describe("FFmpeg helpers", () => {
+  it("resolves explicit, environment, managed, and system toolchains in order", () => {
+    expect(
+      resolveFfmpegToolchain({
+        ffmpegPath: "configured-ffmpeg",
+        environment: {
+          AI_CARTOON_FFMPEG_PATH: "environment-ffmpeg",
+          AI_CARTOON_FFPROBE_PATH: "environment-ffprobe",
+        },
+      }),
+    ).toMatchObject({
+      ffmpeg: { executable: "configured-ffmpeg", source: "explicit" },
+      ffprobe: { executable: "environment-ffprobe", source: "environment" },
+    });
+
+    const managed = resolveFfmpegToolchain({
+      environment: {},
+      loadModule: (id) =>
+        id === "ffmpeg-static" ? "/managed/ffmpeg" : { default: "/managed/ffprobe" },
+      pathExists: () => true,
+    });
+    expect(managed).toMatchObject({
+      ffmpeg: {
+        executable: "/managed/ffmpeg",
+        source: "managed",
+        packageName: "ffmpeg-static",
+      },
+      ffprobe: {
+        executable: "/managed/ffprobe",
+        source: "managed",
+        packageName: "@derhuerst/ffprobe-static",
+      },
+    });
+
+    expect(
+      resolveFfmpegToolchain({
+        environment: { AI_CARTOON_DISABLE_MANAGED_FFMPEG: "true" },
+        loadModule: () => "/should-not-load",
+        pathExists: () => true,
+      }),
+    ).toEqual({
+      ffmpeg: { executable: "ffmpeg", source: "system" },
+      ffprobe: { executable: "ffprobe", source: "system" },
+    });
+  });
+
   it("doctors ffmpeg and ffprobe through an injected runner", async () => {
     const runner: ProcessRunner = async (executable) => ({
       exitCode: executable === "ffmpeg-custom" ? 0 : 1,
@@ -19,7 +69,11 @@ describe("FFmpeg helpers", () => {
       runner,
     });
     expect(report.ok).toBe(false);
-    expect(report.ffmpeg).toMatchObject({ available: true, version: "ffmpeg version 7.1" });
+    expect(report.ffmpeg).toMatchObject({
+      available: true,
+      version: "ffmpeg version 7.1",
+      source: "explicit",
+    });
     expect(report.ffprobe.available).toBe(false);
   });
 

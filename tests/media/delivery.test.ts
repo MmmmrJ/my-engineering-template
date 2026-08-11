@@ -223,6 +223,8 @@ function dependencies(fixtures: FixtureSet): FinalDeliveryValidatorDependencies 
   });
   return {
     runner,
+    ffmpegPath: "ffmpeg",
+    ffprobePath: "ffprobe",
     readFile: async (path) => {
       if (path === paths.srt) return fixtures.srt;
       if (path === paths.ass) return fixtures.ass;

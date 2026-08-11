@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,11 +18,15 @@ import {
   validateFinalDelivery,
   createTimelineRenderPlan,
   executeMediaPlan,
+  resolveFfmpegToolchain,
   type FinalDeliveryExpectations,
 } from "../../src/media/index.js";
 import { WorkflowService } from "../../src/workflow/index.js";
+import { makeStageContract } from "../helpers/stage-contracts.js";
 
-const HAS_MEDIA_TOOLS = commandWorks("ffmpeg") && commandWorks("ffprobe");
+const TOOLCHAIN = resolveFfmpegToolchain();
+const HAS_MEDIA_TOOLS =
+  commandWorks(TOOLCHAIN.ffmpeg.executable) && commandWorks(TOOLCHAIN.ffprobe.executable);
 const TEST_EXPECTATIONS: FinalDeliveryExpectations = {
   width: 324,
   height: 576,
@@ -96,20 +100,32 @@ it.skipIf(!HAS_MEDIA_TOOLS)(
           height: 576,
           outputPath: video,
         },
-        { overwrite: true, preset: "ultrafast", crf: 30 },
+        {
+          overwrite: true,
+          preset: "ultrafast",
+          crf: 30,
+          ffmpegPath: TOOLCHAIN.ffmpeg.executable,
+        },
       ),
       { workspaceRoot: root, timeoutMs: 60_000 },
     );
 
-    const initialQc = await validateFinalDelivery({
-      videoPath: video,
-      srtPath: srt,
-      assPath: ass,
-      expectations: TEST_EXPECTATIONS,
-      aiLabel: { visible: true, evidence: AI_LABEL.disclosure ?? AI_LABEL.method },
-    });
+    const initialQc = await validateFinalDelivery(
+      {
+        videoPath: video,
+        srtPath: srt,
+        assPath: ass,
+        expectations: TEST_EXPECTATIONS,
+        aiLabel: { visible: true, evidence: AI_LABEL.disclosure ?? AI_LABEL.method },
+      },
+      {
+        ffmpegPath: TOOLCHAIN.ffmpeg.executable,
+        ffprobePath: TOOLCHAIN.ffprobe.executable,
+      },
+    );
     expect(initialQc.ok, JSON.stringify(initialQc.checks, undefined, 2)).toBe(true);
     await writeFile(qcPath, `${JSON.stringify(initialQc.report, undefined, 2)}\n`, "utf8");
+    const stageFiles = await createStageFixtureFiles(root, stageSource, video, srt, ass, qcPath);
 
     let sequence = 0;
     const service = new WorkflowService({
@@ -117,7 +133,13 @@ it.skipIf(!HAS_MEDIA_TOOLS)(
       providerFacade: fakeProviderFacade(),
       idGenerator: (prefix) => `${prefix}_${++sequence}`,
       deliveryValidator: (input) =>
-        validateFinalDelivery({ ...input, expectations: TEST_EXPECTATIONS }),
+        validateFinalDelivery(
+          { ...input, expectations: TEST_EXPECTATIONS },
+          {
+            ffmpegPath: TOOLCHAIN.ffmpeg.executable,
+            ffprobePath: TOOLCHAIN.ffprobe.executable,
+          },
+        ),
     });
     const { taskDirectory } = await service.createTask({
       ip: "原创灯塔镇",
@@ -136,8 +158,7 @@ it.skipIf(!HAS_MEDIA_TOOLS)(
           })),
         );
       }
-      const sourceFiles =
-        stage === "edit" ? [video, srt, ass] : stage === "qc" ? [qcPath] : [stageSource];
+      const sourceFiles = stageFiles[stage];
       const rights: RightsRecord | undefined =
         stage === "concept"
           ? ORIGINAL_RIGHTS
@@ -161,6 +182,11 @@ it.skipIf(!HAS_MEDIA_TOOLS)(
       const imported = await service.importArtifact(taskDirectory, {
         stage,
         sourceFiles,
+        stageContract: await makeStageContract(
+          await service.getState(taskDirectory),
+          stage,
+          sourceFiles,
+        ),
         ...(rights ? { rights } : {}),
         ...(stage === "edit" || stage === "qc" ? { aiLabel: AI_LABEL } : {}),
       });
@@ -185,6 +211,55 @@ it.skipIf(!HAS_MEDIA_TOOLS)(
   120_000,
 );
 
+async function createStageFixtureFiles(
+  root: string,
+  stageSource: string,
+  video: string,
+  srt: string,
+  ass: string,
+  qc: string,
+): Promise<Record<WorkflowStage, readonly string[]>> {
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const assets = Array.from({ length: 5 }, (_, index) => join(root, `asset-${index + 1}.png`));
+  const keyframes = Array.from({ length: 11 }, (_, index) => join(root, `keyframe-${index + 1}.png`));
+  const consistency = join(root, "consistency-report.json");
+  const clips = Array.from({ length: 11 }, (_, index) => join(root, `clip-${index + 1}.mp4`));
+  const technical = join(root, "technical-report.json");
+  const audioBase = join(root, "audio-base.wav");
+  const audio = ["voice-1.wav", "voice-2.wav", "music.wav", "sfx.wav", "mix.wav"].map((name) =>
+    join(root, name),
+  );
+  const subtitleContent = join(root, "subtitle-content.txt");
+  const timeline = join(root, "timeline.json");
+  const sync = join(root, "sync-report.json");
+  await Promise.all([
+    ...assets.map((path) => writeFile(path, png)),
+    ...keyframes.map((path) => writeFile(path, png)),
+    writeFile(consistency, '{"passed":true}\n', "utf8"),
+    writeFile(technical, '{"passed":true}\n', "utf8"),
+    writeFile(subtitleContent, "AI-generated offline story\n", "utf8"),
+    writeFile(timeline, '{"schemaVersion":1}\n', "utf8"),
+    writeFile(sync, '{"passed":true}\n', "utf8"),
+    ...clips.map((path) => copyFile(video, path)),
+  ]);
+  generateFixtureAudio(audioBase);
+  await Promise.all(audio.map((path) => copyFile(audioBase, path)));
+  return {
+    concept: [stageSource],
+    script: [stageSource],
+    storyboard: [stageSource],
+    assets,
+    keyframes: [...keyframes, consistency],
+    clips: [...clips, technical],
+    audio: [...audio, subtitleContent],
+    edit: [video, srt, ass, timeline, sync],
+    qc: [qc],
+  };
+}
+
 function derivedRights(
   sourceArtifactIds: readonly string[] | undefined,
   declaration: string,
@@ -202,7 +277,7 @@ function commandWorks(command: string): boolean {
 
 function generateFixtureVideo(output: string): void {
   const result = spawnSync(
-    "ffmpeg",
+    TOOLCHAIN.ffmpeg.executable,
     [
       "-hide_banner",
       "-loglevel",
@@ -240,6 +315,30 @@ function generateFixtureVideo(output: string): void {
   );
   if (result.status !== 0) {
     throw new Error(`FFmpeg fixture generation failed: ${result.stderr || result.error?.message}`);
+  }
+}
+
+function generateFixtureAudio(output: string): void {
+  const result = spawnSync(
+    TOOLCHAIN.ffmpeg.executable,
+    [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-nostdin",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:sample_rate=48000:duration=2",
+      "-c:a",
+      "pcm_s16le",
+      output,
+    ],
+    { encoding: "utf8", timeout: 60_000 },
+  );
+  if (result.status !== 0) {
+    throw new Error(`FFmpeg audio fixture generation failed: ${result.stderr || result.error?.message}`);
   }
 }
 

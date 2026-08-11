@@ -1,9 +1,35 @@
+import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ProcessRunner } from "./process.js";
 import { MediaProcessError, runChecked, runProcess } from "./process.js";
 
+const require = createRequire(import.meta.url);
+
+export type MediaToolSource = "explicit" | "environment" | "managed" | "system";
+
+export interface ResolvedMediaTool {
+  readonly executable: string;
+  readonly source: MediaToolSource;
+  readonly packageName?: string;
+}
+
+export interface ResolvedFfmpegToolchain {
+  readonly ffmpeg: ResolvedMediaTool;
+  readonly ffprobe: ResolvedMediaTool;
+}
+
+export interface ResolveFfmpegToolchainOptions {
+  readonly ffmpegPath?: string;
+  readonly ffprobePath?: string;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+  readonly loadModule?: (id: string) => unknown;
+  readonly pathExists?: (path: string) => boolean;
+}
+
 export interface MediaToolStatus {
   readonly executable: string;
+  readonly source: MediaToolSource;
   readonly available: boolean;
   readonly version?: string;
   readonly message?: string;
@@ -22,6 +48,41 @@ export interface MediaDoctorOptions {
   readonly ffprobePath?: string;
   readonly runner?: ProcessRunner;
   readonly timeoutMs?: number;
+}
+
+/**
+ * Resolve a trusted FFmpeg toolchain without downloading or executing anything.
+ * Precedence is explicit config, environment override, optional npm-managed
+ * binary, then the system PATH. Managed packages are optional so restricted
+ * installations can use `npm ci --omit=optional` and provide their own tools.
+ */
+export function resolveFfmpegToolchain(
+  options: ResolveFfmpegToolchainOptions = {},
+): ResolvedFfmpegToolchain {
+  const environment = options.environment ?? process.env;
+  const managedEnabled = !isTruthy(environment.AI_CARTOON_DISABLE_MANAGED_FFMPEG);
+  const loadModule = options.loadModule ?? ((id: string) => require(id) as unknown);
+  const pathExists = options.pathExists ?? existsSync;
+  return {
+    ffmpeg: resolveMediaTool({
+      explicit: options.ffmpegPath,
+      environment: environment.AI_CARTOON_FFMPEG_PATH,
+      managedEnabled,
+      packageName: "ffmpeg-static",
+      systemName: "ffmpeg",
+      loadModule,
+      pathExists,
+    }),
+    ffprobe: resolveMediaTool({
+      explicit: options.ffprobePath,
+      environment: environment.AI_CARTOON_FFPROBE_PATH,
+      managedEnabled,
+      packageName: "@derhuerst/ffprobe-static",
+      systemName: "ffprobe",
+      loadModule,
+      pathExists,
+    }),
+  };
 }
 
 export interface ProbedMediaStream {
@@ -64,9 +125,10 @@ export async function doctorMediaTools(
   options: MediaDoctorOptions = {},
 ): Promise<MediaDoctorReport> {
   const runner = options.runner ?? runProcess;
+  const toolchain = resolveFfmpegToolchain(options);
   const [ffmpeg, ffprobe] = await Promise.all([
-    checkTool(options.ffmpegPath ?? "ffmpeg", runner, options.timeoutMs ?? 10_000),
-    checkTool(options.ffprobePath ?? "ffprobe", runner, options.timeoutMs ?? 10_000),
+    checkTool(toolchain.ffmpeg, runner, options.timeoutMs ?? 10_000),
+    checkTool(toolchain.ffprobe, runner, options.timeoutMs ?? 10_000),
   ]);
   return {
     ok: ffmpeg.available && ffprobe.available,
@@ -81,7 +143,7 @@ export async function probeMedia(
   options: ProbeMediaOptions = {},
 ): Promise<MediaProbe> {
   const absolutePath = resolve(path);
-  const executable = options.ffprobePath ?? "ffprobe";
+  const executable = resolveFfmpegToolchain({ ffprobePath: options.ffprobePath }).ffprobe.executable;
   const args = [
     "-v",
     "error",
@@ -141,16 +203,18 @@ export function normalizeProbe(value: unknown, path: string): MediaProbe {
 }
 
 async function checkTool(
-  executable: string,
+  tool: ResolvedMediaTool,
   runner: ProcessRunner,
   timeoutMs: number,
 ): Promise<MediaToolStatus> {
+  const executable = tool.executable;
   const startedAt = performance.now();
   try {
     const result = await runner(executable, ["-version"], { timeoutMs, maxOutputBytes: 1_024 * 1_024 });
     const firstLine = (result.stdout || result.stderr).split(/\r?\n/, 1)[0]?.trim();
     return {
       executable,
+      source: tool.source,
       available: result.exitCode === 0,
       ...(firstLine ? { version: firstLine } : {}),
       ...(result.exitCode === 0 ? {} : { message: `Exited with code ${result.exitCode}` }),
@@ -159,11 +223,69 @@ async function checkTool(
   } catch (error) {
     return {
       executable,
+      source: tool.source,
       available: false,
       message: error instanceof Error ? error.message : "Tool check failed",
       latencyMs: Math.round(performance.now() - startedAt),
     };
   }
+}
+
+interface ResolveMediaToolOptions {
+  readonly explicit?: string;
+  readonly environment?: string;
+  readonly managedEnabled: boolean;
+  readonly packageName: string;
+  readonly systemName: string;
+  readonly loadModule: (id: string) => unknown;
+  readonly pathExists: (path: string) => boolean;
+}
+
+function resolveMediaTool(options: ResolveMediaToolOptions): ResolvedMediaTool {
+  const explicit = cleanExecutable(options.explicit, "explicit FFmpeg executable");
+  if (explicit) return { executable: explicit, source: "explicit" };
+  const environment = cleanExecutable(options.environment, "FFmpeg environment override");
+  if (environment) return { executable: environment, source: "environment" };
+  if (options.managedEnabled) {
+    try {
+      const executable = moduleExecutable(options.loadModule(options.packageName));
+      if (executable && options.pathExists(executable)) {
+        return {
+          executable,
+          source: "managed",
+          packageName: options.packageName,
+        };
+      }
+    } catch {
+      // Optional dependency is absent or unavailable; fall back to PATH.
+    }
+  }
+  return { executable: options.systemName, source: "system" };
+}
+
+function moduleExecutable(value: unknown): string | undefined {
+  if (typeof value === "string") return cleanExecutable(value, "managed FFmpeg executable");
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  for (const candidate of [record.default, record.path]) {
+    if (typeof candidate === "string") {
+      return cleanExecutable(candidate, "managed FFmpeg executable");
+    }
+  }
+  return undefined;
+}
+
+function cleanExecutable(value: string | undefined, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  const cleaned = value.trim();
+  if (!cleaned || cleaned.includes("\0")) {
+    throw new TypeError(`${label} must be a non-empty path or command name`);
+  }
+  return cleaned;
+}
+
+function isTruthy(value: string | undefined): boolean {
+  return value !== undefined && ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
 function normalizeStream(value: unknown, fallbackIndex: number): ProbedMediaStream | undefined {

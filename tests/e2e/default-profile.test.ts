@@ -9,13 +9,15 @@ import { expect, it } from "vitest";
 import {
   createTimelineRenderPlan,
   executeMediaPlan,
+  resolveFfmpegToolchain,
   validateFinalDelivery,
 } from "../../src/media/index.js";
 
+const TOOLCHAIN = resolveFfmpegToolchain();
 const ENABLED =
   process.env.AI_CARTOON_FULL_MEDIA_E2E === "1" &&
-  commandWorks("ffmpeg") &&
-  commandWorks("ffprobe");
+  commandWorks(TOOLCHAIN.ffmpeg.executable) &&
+  commandWorks(TOOLCHAIN.ffprobe.executable);
 
 it.skipIf(!ENABLED)(
   "renders and validates the complete default 1080x1920, 60-second delivery profile",
@@ -51,20 +53,32 @@ it.skipIf(!ENABLED)(
           subtitleSha256: assSha256,
           outputPath: video,
         },
-        { overwrite: true, preset: "ultrafast", crf: 32, threads: 2 },
+        {
+          overwrite: true,
+          preset: "ultrafast",
+          crf: 32,
+          threads: 2,
+          ffmpegPath: TOOLCHAIN.ffmpeg.executable,
+        },
       ),
       { workspaceRoot: root, timeoutMs: 240_000 },
     );
 
-    const validation = await validateFinalDelivery({
-      videoPath: video,
-      srtPath: srt,
-      assPath: ass,
-      aiLabel: {
-        visible: true,
-        evidence: "Deterministic renderer burned the generated AI disclosure overlay.",
+    const validation = await validateFinalDelivery(
+      {
+        videoPath: video,
+        srtPath: srt,
+        assPath: ass,
+        aiLabel: {
+          visible: true,
+          evidence: "Deterministic renderer burned the generated AI disclosure overlay.",
+        },
       },
-    });
+      {
+        ffmpegPath: TOOLCHAIN.ffmpeg.executable,
+        ffprobePath: TOOLCHAIN.ffprobe.executable,
+      },
+    );
     expect(validation.ok, JSON.stringify(validation.checks, undefined, 2)).toBe(true);
     expect(validation.report.qc.metrics).toMatchObject({
       width: 1_080,
@@ -90,7 +104,7 @@ function commandWorks(command: string): boolean {
 
 function generateRawFixture(output: string): void {
   const result = spawnSync(
-    "ffmpeg",
+    TOOLCHAIN.ffmpeg.executable,
     [
       "-hide_banner",
       "-loglevel",

@@ -2,6 +2,14 @@
   "schemaVersion": 1,
   "providers": [
     {
+      "id": "local-ffmpeg",
+      "displayName": "Local FFmpeg",
+      "adapter": "local-ffmpeg",
+      "enabled": true,
+      "dataTransfer": "local-only",
+      "currency": "CNY"
+    },
+    {
       "id": "manual",
       "displayName": "Manual Import",
       "adapter": "manual",
@@ -9,6 +17,42 @@
       "dataTransfer": "user-managed",
       "requestDirectory": "output/_provider-health/manual/requests",
       "resultDirectory": "output/_provider-health/manual/results"
+    },
+    {
+      "id": "jimeng-manual",
+      "displayName": "即梦 AI（手工导出）",
+      "adapter": "jimeng-manual",
+      "enabled": true,
+      "dataTransfer": "user-managed upload to external cloud; download original files before import",
+      "requestDirectory": "output/_provider-health/jimeng/requests",
+      "resultDirectory": "output/_provider-health/jimeng/results"
+    },
+    {
+      "id": "kling-manual",
+      "displayName": "可灵 AI（手工导出）",
+      "adapter": "kling-manual",
+      "enabled": true,
+      "dataTransfer": "user-managed upload to external cloud; download original files before import",
+      "requestDirectory": "output/_provider-health/kling/requests",
+      "resultDirectory": "output/_provider-health/kling/results"
+    },
+    {
+      "id": "liblib-manual",
+      "displayName": "LibLibAI（手工工作流导出）",
+      "adapter": "liblib-manual",
+      "enabled": true,
+      "dataTransfer": "user-managed upload to external cloud; record workflow version and download outputs",
+      "requestDirectory": "output/_provider-health/liblib/requests",
+      "resultDirectory": "output/_provider-health/liblib/results"
+    },
+    {
+      "id": "jianying-manual",
+      "displayName": "剪映（手工剪辑导出）",
+      "adapter": "jianying-manual",
+      "enabled": true,
+      "dataTransfer": "user-managed local or cloud editor import/export",
+      "requestDirectory": "output/_provider-health/jianying/requests",
+      "resultDirectory": "output/_provider-health/jianying/results"
     },
     {
       "id": "minimax",

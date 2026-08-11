@@ -4,7 +4,9 @@ import type {
   RightsRecord,
   VoiceCloneConsentRecord,
 } from "./artifacts.js";
+import type { StageContract } from "./stage-contracts.js";
 import type { ReviewInput } from "./review.js";
+import type { ReviewMode } from "./review.js";
 import type { ProviderCapability, WorkflowStage } from "./stages.js";
 import type { ProjectManifest, TaskState } from "./state.js";
 
@@ -12,6 +14,8 @@ import type { ProjectManifest, TaskState } from "./state.js";
 export interface CreateTaskInput {
   ip: string;
   theme: string;
+  /** Strict remains the compatibility default. */
+  reviewMode?: ReviewMode;
 }
 
 export interface CreateTaskResult {
@@ -37,6 +41,8 @@ export interface ProviderArtifactMetadata {
 export interface ImportArtifactInput {
   stage: WorkflowStage;
   sourceFiles: readonly string[];
+  /** Required by production services; optional only for replaying legacy pre-contract callers. */
+  stageContract?: StageContract;
   summary?: string;
   mediaType?: string;
   rights?: RightsRecord;
@@ -58,6 +64,16 @@ export interface ImportArtifactInput {
     >
   >;
   metadata?: Readonly<Record<string, unknown>>;
+}
+
+export interface GenerateStageInput {
+  stage?: "concept" | "script" | "storyboard";
+  rights?: RightsRecord;
+}
+
+export interface GenerateStageResult extends ImportArtifactResult {
+  reviewPacketPath: string;
+  stageContract: StageContract;
 }
 
 export interface ImportArtifactResult {

@@ -2,6 +2,8 @@
 
 Meet the minimum contract below before requesting review. Keep stable character, location, prop, shot, and revision IDs across stages.
 
+Persist the matching `schemaVersion: 1` structured `stageContract` with every revision. The runtime validates required fields, stable-ID coverage, durations, upstream references, imported file names and file roles, automatic review/QC results, and blocking issues before it creates a reviewable revision. Primary asset, keyframe, clip, dialogue, music, and SFX entries must use distinct files; contact sheets, proxy assemblies, reports, subtitles, and timelines must use their declared media/document formats rather than reusing a primary file.
+
 ## `concept`
 
 - Identify the original or proven-public-domain IP and record its rights basis.

@@ -11,6 +11,8 @@ const required = [
   "skills/configure-ai-cartoon-providers/SKILL.md",
   "config/defaults.json",
   "config/providers.example.json",
+  "docs/FFMPEG_DEPLOYMENT.md",
+  "docs/STAGE_CONTRACTS.md",
   "output/.gitkeep",
 ];
 
@@ -21,6 +23,16 @@ for (const path of required) {
 const plugin = JSON.parse(
   await readFile(resolve(root, ".codex-plugin/plugin.json"), "utf8"),
 );
+
+const packageManifest = JSON.parse(
+  await readFile(resolve(root, "package.json"), "utf8"),
+);
+if (
+  packageManifest.optionalDependencies?.["ffmpeg-static"] !== "5.3.0" ||
+  packageManifest.optionalDependencies?.["@derhuerst/ffprobe-static"] !== "5.3.0"
+) {
+  throw new Error("Managed FFmpeg and ffprobe optional dependencies must remain exactly pinned.");
+}
 if (plugin.name !== "ai-cartoon-workflow" || !/^\d+\.\d+\.\d+$/.test(plugin.version)) {
   throw new Error("Plugin manifest name or semantic version is invalid.");
 }
@@ -75,6 +87,20 @@ for (const integration of locks.integrations) {
 const providerConfig = JSON.parse(
   await readFile(resolve(root, "config/providers.example.json"), "utf8"),
 );
+const localFfmpeg = providerConfig.providers?.find(
+  (provider) => provider.id === "local-ffmpeg",
+);
+if (
+  localFfmpeg?.adapter !== "local-ffmpeg" ||
+  localFfmpeg.enabled !== true ||
+  localFfmpeg.dataTransfer !== "local-only" ||
+  (localFfmpeg.ffmpegPath !== undefined && typeof localFfmpeg.ffmpegPath !== "string") ||
+  (localFfmpeg.ffprobePath !== undefined && typeof localFfmpeg.ffprobePath !== "string")
+) {
+  throw new Error(
+    "The example provider profile must enable the secret-free local-ffmpeg route.",
+  );
+}
 for (const provider of providerConfig.providers ?? []) {
   if (!provider.dataTransfer) {
     throw new Error(`Provider ${provider.id} must disclose its data-transfer mode.`);

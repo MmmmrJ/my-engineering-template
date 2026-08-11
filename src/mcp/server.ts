@@ -9,6 +9,7 @@ import {
   PROVIDER_CAPABILITIES,
   REVIEW_DECISIONS,
   WORKFLOW_STAGES,
+  stageContractSchema,
   type SelectProviderInput,
 } from "../contracts/index.js";
 import {
@@ -21,6 +22,7 @@ import {
 import { WorkflowService } from "../workflow/index.js";
 import { WorkflowError } from "../workflow/index.js";
 import {
+  manualCompletionMcpSchema,
   providerAttemptMcpSchema,
   providerEstimateMcpSchema,
   providerJobsMcpSchema,
@@ -123,11 +125,17 @@ export async function createCartoonMcpServer(
       inputSchema: {
         ip: z.string().min(1),
         theme: z.string().min(1),
+        reviewMode: z.enum(["strict", "quick"]).optional(),
         outputRoot: z.string().min(1).optional(),
       },
     },
-    async ({ ip, theme, outputRoot }) => {
-      return jsonResult(await workflow.createTask({ ip, theme }, outputRoot));
+    async ({ ip, theme, reviewMode, outputRoot }) => {
+      return jsonResult(
+        await workflow.createTask(
+          { ip, theme, ...(reviewMode ? { reviewMode } : {}) },
+          outputRoot,
+        ),
+      );
     },
   );
 
@@ -145,11 +153,31 @@ export async function createCartoonMcpServer(
     "cartoon_resume",
     {
       description:
-        "Return the one safe next action for a task without bypassing a user review gate.",
+        "Return the one safe next action; strict mode has nine user gates and quick mode has three audited bundle gates.",
       inputSchema: { taskId: z.string().min(1) },
       annotations: { readOnlyHint: true },
     },
     async ({ taskId }) => jsonResult(await workflow.resume(taskId)),
+  );
+
+  server.registerTool(
+    "cartoon_generate_stage",
+    {
+      description:
+        "Generate and import a validated default G1-G3 stage contract; quick mode policy-accepts non-checkpoints and retains them for the next bundle review.",
+      inputSchema: {
+        taskId: z.string().min(1),
+        stage: z.enum(["concept", "script", "storyboard"]).optional(),
+        rights: rightsRecordSchema.optional(),
+      },
+    },
+    async ({ taskId, stage, rights }) =>
+      jsonResult(
+        await workflow.generateStage(taskId, {
+          ...(stage ? { stage } : {}),
+          ...(rights ? { rights } : {}),
+        }),
+      ),
   );
 
   server.registerTool(
@@ -237,6 +265,7 @@ export async function createCartoonMcpServer(
         taskId: z.string().min(1),
         stage: z.enum(WORKFLOW_STAGES),
         files: z.array(z.string().min(1)).min(1),
+        stageContract: stageContractSchema,
         summary: z.string().optional(),
         mediaType: z.string().optional(),
         rights: rightsRecordSchema.optional(),
@@ -374,6 +403,23 @@ export async function createCartoonMcpServer(
             eligible.request,
             eligible.context,
           ),
+        ),
+      );
+    },
+  );
+
+  server.registerTool(
+    "cartoon_complete_manual_provider_job",
+    {
+      description:
+        "Archive user-exported files into task scope, complete the matching manual provider attempt, and make it recoverable through cartoon_resume.",
+      inputSchema: manualCompletionMcpSchema,
+    },
+    async ({ taskId, attemptId, result }) => {
+      await workflow.getState(taskId);
+      return jsonResult(
+        await safeProviderCall(() =>
+          providerManager(providers, workflow, taskId).completeManual(attemptId, result),
         ),
       );
     },

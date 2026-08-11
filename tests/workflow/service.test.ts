@@ -11,6 +11,7 @@ import {
 } from "../../src/contracts/index.js";
 import type {
   AiLabelRecord,
+  ProviderFacade,
   RightsRecord,
   WorkflowStage,
 } from "../../src/contracts/index.js";
@@ -75,10 +76,12 @@ describe("WorkflowService", () => {
     await writeFile(source, "deterministic artifact\n", "utf8");
     sequence = 0;
     service = new WorkflowService({
+      legacyUnstructuredImportsForTests: true,
       defaultRoot: root,
       clock: () => FIXED_DATE,
       idGenerator: (prefix) => `${prefix}_${++sequence}`,
       deliveryValidator: () => Promise.resolve(structuredClone(PASSING_DELIVERY_VALIDATION)),
+      providerFacade: manualProviderFacade(),
     });
   });
 
@@ -537,7 +540,7 @@ describe("WorkflowService", () => {
     const ass = join(root, "subtitles.ass");
     const qcReport = join(root, "qc-report.json");
     await Promise.all([
-      writeFile(master, "deterministic fake MP4 fixture\n"),
+      writeFile(master, Buffer.from([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d])),
       writeFile(srt, "1\n00:00:00,000 --> 00:00:01,000\nAI-generated fixture\n"),
       writeFile(
         ass,
@@ -581,8 +584,8 @@ describe("WorkflowService", () => {
       approvedRevisions: { edit: "v002", qc: "v002" },
       deliveryValidation: { status: "passed" },
     });
-    await expect(readFile(join(exported.outputDirectory, "episode.mp4"), "utf8")).resolves.toContain(
-      "deterministic fake MP4",
+    await expect(readFile(join(exported.outputDirectory, "episode.mp4"))).resolves.toEqual(
+      Buffer.from([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d]),
     );
     await expect(readFile(join(exported.outputDirectory, "subtitles.srt"), "utf8")).resolves.toContain(
       "AI-generated fixture",
@@ -653,4 +656,20 @@ async function importAndApprove(
     target: { stage, revision: imported.revision },
     decision: "approve",
   });
+}
+
+function manualProviderFacade(): ProviderFacade {
+  return {
+    list: () =>
+      Promise.resolve([
+        {
+          id: "manual",
+          name: "Manual Import",
+          capabilities: REQUIRED_PROVIDER_CAPABILITIES,
+          configured: true,
+        },
+      ]),
+    check: () =>
+      Promise.resolve([{ providerId: "manual", ok: true, metadata: { checkedAt: FIXED_DATE.toISOString() } }]),
+  };
 }

@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { extname, isAbsolute } from "node:path";
 import { validateAss, type AssValidationReport } from "./ass.js";
-import { probeMedia, type MediaProbe } from "./ffmpeg.js";
+import { probeMedia, resolveFfmpegToolchain, type MediaProbe } from "./ffmpeg.js";
 import type { ProcessRunner } from "./process.js";
 import { runChecked, runProcess } from "./process.js";
 import {
@@ -147,6 +147,10 @@ export async function validateFinalDelivery(
   const getStat = dependencies.stat ?? stat;
   const hash = dependencies.hashFile ?? sha256File;
   const runner = dependencies.runner ?? runProcess;
+  const toolchain = resolveFfmpegToolchain({
+    ffmpegPath: dependencies.ffmpegPath,
+    ffprobePath: dependencies.ffprobePath,
+  });
   const generatedAt = dependencies.now?.() ?? new Date().toISOString();
   const paths = [input.videoPath, input.srtPath, input.assPath] as const;
   const fileStats = await Promise.all(paths.map((path) => getStat(path)));
@@ -161,7 +165,7 @@ export async function validateFinalDelivery(
     readText(input.srtPath),
     readText(input.assPath),
     probeMedia(input.videoPath, {
-      ffprobePath: dependencies.ffprobePath,
+      ffprobePath: toolchain.ffprobe.executable,
       runner,
     }),
   ]);
@@ -187,7 +191,11 @@ export async function validateFinalDelivery(
 
   // Export is the final trust boundary. Always inspect the actual immutable
   // media instead of trusting analysis copied into an editable JSON report.
-  const analysis = await inspectDeliveryMedia(input.videoPath, runner, dependencies.ffmpegPath);
+  const analysis = await inspectDeliveryMedia(
+    input.videoPath,
+    runner,
+    toolchain.ffmpeg.executable,
+  );
   const { subtitleTimingToleranceMs = 100, ...qcExpectations } = input.expectations ?? {};
   const qc = buildQcReport(probe, analysis, qcExpectations, generatedAt);
   const srtReport = validateSrt(srtSource);

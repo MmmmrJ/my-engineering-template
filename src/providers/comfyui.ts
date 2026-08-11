@@ -100,6 +100,7 @@ export class ComfyUiProviderAdapter implements ProviderAdapter {
       ...(config.termsUrl ? { termsUrl: config.termsUrl } : {}),
       ...(config.privacyUrl ? { privacyUrl: config.privacyUrl } : {}),
       metadata: {
+        advancedLocalWorkflow: true,
         transport: "local-http",
         submitPath: "/prompt",
         historyPath: "/history",

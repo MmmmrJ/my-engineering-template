@@ -5,31 +5,43 @@ import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 
 import type { DoctorCheck, DoctorReport, DoctorRunner } from "../contracts/index.js";
+import {
+  resolveFfmpegToolchain,
+  type ResolvedFfmpegToolchain,
+  type ResolvedMediaTool,
+} from "../media/ffmpeg.js";
 
 const execFileAsync = promisify(execFile);
 
 export interface DefaultDoctorOptions {
   outputRoot?: string;
   providerConfigCheck?: () => Promise<DoctorCheck>;
+  ffmpegPath?: string;
+  ffprobePath?: string;
 }
 
 export class DefaultDoctorRunner implements DoctorRunner {
   private readonly outputRoot: string;
   private readonly providerConfigCheck?: () => Promise<DoctorCheck>;
+  private readonly toolchain: ResolvedFfmpegToolchain;
 
   constructor(options: DefaultDoctorOptions = {}) {
     this.outputRoot = resolve(
       options.outputRoot ?? process.env.AI_CARTOON_OUTPUT_ROOT ?? resolve(process.cwd(), "output"),
     );
     this.providerConfigCheck = options.providerConfigCheck;
+    this.toolchain = resolveFfmpegToolchain({
+      ffmpegPath: options.ffmpegPath,
+      ffprobePath: options.ffprobePath,
+    });
   }
 
   async run(): Promise<DoctorReport> {
     const [baseChecks, ffmpegFeatures] = await Promise.all([
       Promise.all([
       Promise.resolve(checkNodeVersion()),
-      checkExecutable("ffmpeg"),
-      checkExecutable("ffprobe"),
+      checkExecutable("ffmpeg", this.toolchain.ffmpeg),
+      checkExecutable("ffprobe", this.toolchain.ffprobe),
       checkWritableAncestor(this.outputRoot),
         checkFont(),
         this.providerConfigCheck?.() ?? Promise.resolve({
@@ -38,18 +50,18 @@ export class DefaultDoctorRunner implements DoctorRunner {
           message: "Provider config check was not configured for this runner.",
         }),
       ]),
-      checkFfmpegFeatures(),
+      checkFfmpegFeatures(this.toolchain.ffmpeg.executable),
     ]);
     const checks = [...baseChecks, ...ffmpegFeatures];
     return { ok: checks.every((check) => check.ok), checks };
   }
 }
 
-async function checkFfmpegFeatures(): Promise<DoctorCheck[]> {
+async function checkFfmpegFeatures(ffmpegPath: string): Promise<DoctorCheck[]> {
   try {
     const [{ stdout: encoders }, { stdout: filters }] = await Promise.all([
-      execFileAsync("ffmpeg", ["-hide_banner", "-encoders"], { windowsHide: true, timeout: 10_000 }),
-      execFileAsync("ffmpeg", ["-hide_banner", "-filters"], { windowsHide: true, timeout: 10_000 }),
+      execFileAsync(ffmpegPath, ["-hide_banner", "-encoders"], { windowsHide: true, timeout: 10_000 }),
+      execFileAsync(ffmpegPath, ["-hide_banner", "-filters"], { windowsHide: true, timeout: 10_000 }),
     ]);
     return [
       {
@@ -133,19 +145,28 @@ function checkNodeVersion(): DoctorCheck {
   };
 }
 
-async function checkExecutable(command: "ffmpeg" | "ffprobe"): Promise<DoctorCheck> {
+async function checkExecutable(
+  command: "ffmpeg" | "ffprobe",
+  tool: ResolvedMediaTool,
+): Promise<DoctorCheck> {
   try {
-    const { stdout, stderr } = await execFileAsync(command, ["-version"], {
+    const { stdout, stderr } = await execFileAsync(tool.executable, ["-version"], {
       windowsHide: true,
       timeout: 10_000,
     });
     const version = `${stdout}${stderr}`.split(/\r?\n/)[0]?.trim() || "available";
-    return { name: command, ok: true, message: version };
+    return {
+      name: command,
+      ok: true,
+      message: `${version} [source=${tool.source}; executable=${tool.executable}]`,
+    };
   } catch (error) {
     return {
       name: command,
       ok: false,
-      message: `${command} is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      message: `${command} is unavailable from ${tool.source} (${tool.executable}): ${
+        error instanceof Error ? error.message : String(error)
+      }`,
     };
   }
 }

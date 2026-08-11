@@ -1,5 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { copyFile, mkdir, rename, unlink, writeFile } from "node:fs/promises";
+import { constants as fsConstants, createReadStream } from "node:fs";
+import { copyFile, mkdir, open, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import { isIP } from "node:net";
 import type { FetchLike, ProviderOutput } from "./types.js";
@@ -30,6 +31,97 @@ export interface ArchivedDownload extends ProviderOutput {
   readonly sizeBytes: number;
   readonly sha256: string;
   readonly sourceUrl: string;
+}
+
+export interface SafeLocalArchiveRequest {
+  readonly sourcePath: string;
+  readonly destinationRoot: string;
+  readonly relativePath: string;
+  readonly archiveRoot: string;
+  readonly kind: ProviderOutput["kind"];
+  readonly allowedMimeTypes: readonly string[];
+  readonly maxBytes: number;
+  readonly expectedSha256?: string;
+}
+
+/** Copies a user-exported local result into task scope after size, signature, kind and hash checks. */
+export async function archiveLocalFile(request: SafeLocalArchiveRequest): Promise<ArchivedDownload> {
+  if (!Number.isSafeInteger(request.maxBytes) || request.maxBytes <= 0) {
+    throw new ProviderConfigurationError("Local archive maxBytes must be a positive safe integer");
+  }
+  if (!request.allowedMimeTypes.length) {
+    throw new ProviderConfigurationError("Local archive needs at least one allowed MIME type");
+  }
+  if (request.expectedSha256 && !/^[a-fA-F0-9]{64}$/.test(request.expectedSha256)) {
+    throw new ProviderConfigurationError("expectedSha256 must contain exactly 64 hexadecimal characters");
+  }
+  if (extname(request.relativePath)) {
+    throw new ProviderConfigurationError("Local archive relativePath must not include an extension");
+  }
+  const sourcePath = resolve(request.sourcePath);
+  const details = await stat(sourcePath);
+  if (!details.isFile() || details.size <= 0) {
+    throw new ProviderProtocolError("Manual result source must be a non-empty file");
+  }
+  if (details.size > request.maxBytes) {
+    throw new ProviderProtocolError(
+      `Manual result contains ${details.size} bytes, exceeding the ${request.maxBytes}-byte limit`,
+    );
+  }
+  const signature = Buffer.alloc(32);
+  const handle = await open(sourcePath, "r");
+  let bytesRead: number;
+  try {
+    ({ bytesRead } = await handle.read(signature, 0, signature.length, 0));
+  } finally {
+    await handle.close();
+  }
+  const detectedMime = detectMimeType(signature.subarray(0, bytesRead));
+  const extensionMime = mimeTypeForExtension(extname(sourcePath));
+  const mimeType =
+    detectedMime === "video/mp4" && extensionMime === "audio/mp4"
+      ? "audio/mp4"
+      : detectedMime ?? extensionMime;
+  if (!mimeType || !mimeAllowed(mimeType, request.allowedMimeTypes)) {
+    throw new ProviderProtocolError(
+      `Manual result MIME ${mimeType ?? "unknown"} is not allowed for ${request.kind}`,
+    );
+  }
+  if (detectedMime && extensionMime && !mimeTypesEquivalent(detectedMime, extensionMime)) {
+    throw new ProviderProtocolError(
+      `Manual result signature ${detectedMime} does not match file extension ${extname(sourcePath)}`,
+    );
+  }
+  const detectedKind = inferKind(mimeType);
+  if (request.kind !== detectedKind && !(request.kind === "subtitle" && detectedKind === "text")) {
+    throw new ProviderProtocolError(
+      `Manual result kind ${request.kind} does not match detected kind ${detectedKind}`,
+    );
+  }
+  const digest = createHash("sha256");
+  for await (const chunk of createReadStream(sourcePath)) digest.update(chunk as Buffer);
+  const sha256 = digest.digest("hex");
+  if (request.expectedSha256 && !hashesEqual(sha256, request.expectedSha256)) {
+    throw new ProviderProtocolError("Manual result SHA-256 does not match expectedSha256");
+  }
+  const extension = extensionForLocalFile(extname(sourcePath), mimeType, request.kind);
+  const destinationPath = safeChildPath(request.destinationRoot, `${request.relativePath}${extension}`);
+  const archiveRoot = resolve(request.archiveRoot);
+  const archivePath = safeChildPath(archiveRoot, `${sha256.slice(0, 2)}/${sha256}${extension}`);
+  await mkdir(resolve(destinationPath, ".."), { recursive: true });
+  await mkdir(resolve(archivePath, ".."), { recursive: true });
+  await copyWithVerifiedExisting(sourcePath, archivePath, sha256);
+  await copyWithVerifiedExisting(archivePath, destinationPath, sha256);
+  return {
+    kind: request.kind,
+    uri: sourcePath,
+    sourceUrl: sourcePath,
+    localPath: destinationPath,
+    archivedPath: archivePath,
+    mimeType,
+    sizeBytes: details.size,
+    sha256,
+  };
 }
 
 /**
@@ -151,6 +243,7 @@ export function detectMimeType(bytes: Uint8Array): string | undefined {
   if (ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 4) === "WEBP") return "image/webp";
   if (ascii(bytes, 0, 4) === "RIFF" && ascii(bytes, 8, 4) === "WAVE") return "audio/wav";
   if (ascii(bytes, 0, 4) === "OggS") return "audio/ogg";
+  if (ascii(bytes, 0, 4) === "fLaC") return "audio/flac";
   if (ascii(bytes, 0, 3) === "ID3" || (bytes[0] === 0xff && (bytes[1] ?? 0) >= 0xe0)) {
     return "audio/mpeg";
   }
@@ -331,6 +424,61 @@ function extensionForMimeType(mimeType: string): string {
     );
   }
   return extension;
+}
+
+function mimeTypeForExtension(extension: string): string | undefined {
+  const mimeTypes: Readonly<Record<string, string>> = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".srt": "application/x-subrip",
+    ".ass": "text/plain",
+    ".txt": "text/plain",
+    ".md": "text/plain",
+    ".json": "application/json",
+  };
+  return mimeTypes[extension.toLowerCase()];
+}
+
+function extensionForLocalFile(
+  sourceExtension: string,
+  mimeType: string,
+  kind: ProviderOutput["kind"],
+): string {
+  const extension = sourceExtension.toLowerCase();
+  if (kind === "subtitle" && (extension === ".srt" || extension === ".ass")) return extension;
+  if (kind === "text" && (extension === ".txt" || extension === ".md")) return extension;
+  return extensionForMimeType(mimeType);
+}
+
+async function copyWithVerifiedExisting(
+  source: string,
+  destination: string,
+  expectedSha256: string,
+): Promise<void> {
+  try {
+    await copyFile(source, destination, fsConstants.COPYFILE_EXCL);
+  } catch (error) {
+    if (!isAlreadyExists(error)) throw error;
+    if ((await hashLocalFile(destination)) !== expectedSha256) {
+      throw new ProviderProtocolError(`Existing archived manual result differs: ${destination}`);
+    }
+  }
+}
+
+async function hashLocalFile(path: string): Promise<string> {
+  const digest = createHash("sha256");
+  for await (const chunk of createReadStream(path)) digest.update(chunk as Buffer);
+  return digest.digest("hex");
 }
 
 function inferKind(mimeType: string): ArchivedDownload["kind"] {
