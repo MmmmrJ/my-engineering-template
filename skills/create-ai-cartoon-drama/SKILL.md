@@ -60,11 +60,13 @@ npm run cartoon -- resume <task-id>
 
 Before G4 (`assets`), run provider `list`, `check`, and `select`. Selection freezes the production provider profile; do not silently change it later.
 
-Import externally created artifacts through the CLI so they remain recoverable:
+Import a successful provider attempt through its durable ledger identity so the full archived output set remains recoverable and hash-bound:
 
 ```powershell
-npm run cartoon -- import <task-id> --stage <stage-id> --file <path> --contract @stage-contract.json --metadata @metadata.json
+npm run cartoon -- providers import-output <task-id> --attempt <attempt-id> [--attempt <attempt-id> ...] --contract @stage-contract.json --metadata @metadata.json
 ```
+
+Use ordinary `cartoon import` only for non-job external files. Repeat `--attempt` only to atomically assemble complete terminal output sets prepared for the same stage revision. If archive basenames collide, metadata `fileNames` must assign unique contract basenames by source path. Every imported file requires rights through metadata `rights` or `fileRights`; never assert a provider job ID outside its durable attempt.
 
 ## Finish
 

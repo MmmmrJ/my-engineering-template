@@ -269,10 +269,13 @@ export async function createCartoonMcpServer(
         summary: z.string().optional(),
         mediaType: z.string().optional(),
         rights: rightsRecordSchema.optional(),
+        fileRights: z.record(z.string(), rightsRecordSchema).optional(),
+        fileNames: z.record(z.string(), z.string().min(1)).optional(),
         provider: z
           .object({
             providerId: z.string().min(1),
             capability: z.enum(PROVIDER_CAPABILITIES),
+            attemptId: z.string().uuid().optional(),
             jobId: z.string().optional(),
             model: z.string().optional(),
             promptHash: z.string().optional(),
@@ -282,6 +285,18 @@ export async function createCartoonMcpServer(
               .object({ amount: z.number().nonnegative(), currency: z.string().min(1) })
               .optional(),
           })
+          .optional(),
+        providerAttempts: z
+          .array(
+            z.object({
+              providerId: z.string().min(1),
+              capability: z.enum(PROVIDER_CAPABILITIES),
+              attemptId: z.string().uuid(),
+              jobId: z.string().optional(),
+              model: z.string().optional(),
+            }),
+          )
+          .min(1)
           .optional(),
         aiLabel: z
           .object({
@@ -447,6 +462,7 @@ export async function createCartoonMcpServer(
       const eligibleRequest = await requireProviderResumeEligibility(
         workflow,
         taskId,
+        attemptId,
         attempt.providerId,
         attempt.stage,
         request,

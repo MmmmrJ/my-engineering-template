@@ -31,11 +31,11 @@ Before every new request that may incur a charge, obtain a current estimate or s
 
 Do not ask again when only polling, downloading, or resuming the same provider job and idempotency key. Retrying by creating a new paid job is a new chargeable request and requires a new confirmation.
 
-Always run `cartoon resume <task-id>` before creating a replacement request. If it returns `resume-provider-job`, `poll-provider-job`, or `import-provider-output`, complete that durable action first. A task-local archived output is not a stage revision until it is imported with the validated structured stage contract.
+Always run `cartoon resume <task-id>` before creating a replacement request. If it returns `resume-provider-job`, `poll-provider-job`, `cancel-provider-job`, or `import-provider-output`, complete that durable action first. Only one attempt may be nonterminal at a time. Several successful attempts targeting the same current stage revision may be imported atomically by repeating `--attempt`; use metadata `fileNames` when their archived basenames collide. A task-local archived output is not a stage revision until `cartoon providers import-output` imports the complete hash-checked output sets with a validated structured stage contract and per-file rights.
 
 ## Import metadata
 
-For MCP or manual artifacts, include at least:
+Durable provider attempts derive provider/model/job identity, prompt hash, seed, request/resource IDs, and other allowlisted receipt fields from `provider-jobs.jsonl`; callers must not override them. For ordinary non-job MCP or manual artifacts, include at least:
 
 - provider, profile, model/tool, capability, and mode;
 - request/resource ID or a clear `not_available` reason;

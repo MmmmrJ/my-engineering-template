@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { REQUIRED_PROVIDER_CAPABILITIES, stageContractSchema } from "../../src/contracts/index.js";
 import type { ConceptStageContract, ProviderFacade } from "../../src/contracts/index.js";
 import { validateStageContract, WorkflowService } from "../../src/workflow/index.js";
 
@@ -14,6 +15,43 @@ const ORIGINAL_RIGHTS = {
 };
 
 describe("structured stage contracts and default generator", () => {
+  it("represents documented clip exceptions and narration-only audio", () => {
+    expect(
+      stageContractSchema.safeParse({
+        schemaVersion: 1,
+        stage: "clips",
+        clips: [
+          {
+            shotId: "SHOT_01",
+            durationMs: 5_000,
+            technicalPassed: false,
+            exception: "Static hold is intentional for this approved shot.",
+          },
+        ],
+        proxyAssemblyFile: "proxy.mp4",
+        technicalReportFile: "technical.json",
+      }).success,
+    ).toBe(true);
+    expect(
+      stageContractSchema.safeParse({
+        schemaVersion: 1,
+        stage: "audio",
+        dialogueVoiceMap: [],
+        narrationVoice: {
+          voiceId: "VOICE_NARRATOR",
+          file: "narration.wav",
+          catalogVoice: true,
+        },
+        musicCues: [],
+        sfxCues: [],
+        mixPreviewFile: "mix.wav",
+        subtitleContentFile: "subtitles.srt",
+        pronunciationChecked: true,
+        rightsChecked: true,
+      }).success,
+    ).toBe(true);
+  });
+
   it("fails closed when a production import has no contract or an empty artifact", async () => {
     const root = await mkdtemp(join(tmpdir(), "cartoon-contract-required-"));
     const service = new WorkflowService({ defaultRoot: root });
@@ -75,6 +113,12 @@ describe("structured stage contracts and default generator", () => {
       totalDurationMs: 75_000,
       automaticReview: { passed: true, issues: [] },
     });
+    expect(script.artifacts[0]?.rights).toEqual({
+      basis: "workflow-derived",
+      sourceArtifactIds: concept.artifacts.map((artifact) => artifact.artifactId),
+      declaration:
+        "Generated script derives only from the approved concept revision and task-controlled input.",
+    });
     await service.review(created.taskDirectory, {
       target: { stage: "script", revision: script.revision },
       decision: "approve",
@@ -88,6 +132,59 @@ describe("structured stage contracts and default generator", () => {
       75_000,
     );
     expect(storyboard.state.stages.storyboard.status).toBe("awaiting_review");
+    expect(storyboard.artifacts[0]?.rights).toEqual({
+      basis: "workflow-derived",
+      sourceArtifactIds: script.artifacts.map((artifact) => artifact.artifactId),
+      declaration:
+        "Generated storyboard derives only from the approved script revision and task-controlled input.",
+    });
+  });
+
+  it("fails closed instead of claiming deterministic baseline feedback was applied", async () => {
+    const root = await mkdtemp(join(tmpdir(), "cartoon-feedback-required-"));
+    const service = new WorkflowService({ defaultRoot: root });
+    const created = await service.createTask({ ip: "Original Lantern", theme: "Courage" });
+    const concept = await service.generateStage(created.taskDirectory, { rights: ORIGINAL_RIGHTS });
+    await service.review(created.taskDirectory, {
+      target: { stage: "concept", revision: concept.revision },
+      decision: "approve",
+    });
+    await service.review(created.taskDirectory, {
+      target: { stage: "concept", revision: concept.revision },
+      decision: "revise",
+      feedback: "Change the premise so the protagonist asks for help before acting.",
+      targetIds: ["DIR_MAIN"],
+    });
+
+    await expect(
+      service.generateStage(created.taskDirectory, { rights: ORIGINAL_RIGHTS }),
+    ).rejects.toMatchObject({
+      code: "GENERATOR_UNAVAILABLE",
+    });
+    const state = await service.getState(created.taskDirectory);
+    expect(state.stages.concept.revisions).toHaveLength(1);
+    expect(state.stages.concept.status).toBe("revision_requested");
+  });
+
+  it("requires rights for every production import", async () => {
+    const root = await mkdtemp(join(tmpdir(), "cartoon-all-rights-"));
+    const service = new WorkflowService({ defaultRoot: root });
+    const created = await service.createTask({ ip: "Original Lantern", theme: "Courage" });
+    const concept = await service.generateStage(created.taskDirectory, { rights: ORIGINAL_RIGHTS });
+    await service.review(created.taskDirectory, {
+      target: { stage: "concept", revision: concept.revision },
+      decision: "approve",
+    });
+    const source = join(root, "script.md");
+    await writeFile(source, "# replacement script\n");
+
+    await expect(
+      service.importArtifact(created.taskDirectory, {
+        stage: "script",
+        sourceFiles: [source],
+        stageContract: conceptContract("Original Lantern", "Courage"),
+      }),
+    ).rejects.toMatchObject({ code: "RIGHTS_REQUIRED" });
   });
 
   it("rejects a structurally valid concept contract that does not match task identity", async () => {
@@ -197,6 +294,32 @@ describe("structured stage contracts and default generator", () => {
         },
       }),
     ).toThrow(/distinct file/);
+
+    const assetFiles = approvedStoryboard.assetDefinitions.map(
+      (_, index) => join(root, `asset-${index + 1}.png`),
+    );
+    expect(() =>
+      validateStageContract({
+        stage: "assets",
+        state,
+        sourceFiles: [...assetFiles, join(root, "contact-sheet.png")],
+        contract: {
+          schemaVersion: 1,
+          stage: "assets",
+          styleSpecification: "Consistent original cartoon style.",
+          assets: approvedStoryboard.assetDefinitions.map((asset, index) => ({
+            ...asset,
+            ...(index === 0 ? { type: "prop" as const } : {}),
+            file: `asset-${index + 1}.png`,
+            prompt: `Create ${asset.name}`,
+            negativePrompt: "watermark, drift",
+            rightsNote: "Original provider-cleared output.",
+          })),
+          contactSheetFiles: ["contact-sheet.png"],
+          inventoryComplete: true,
+        },
+      }),
+    ).toThrow(/preserve storyboard type/);
   });
 
   it("rejects an invalid manual capability before freezing provider bindings", async () => {
@@ -224,9 +347,16 @@ describe("structured stage contracts and default generator", () => {
     });
 
     await expect(
-      service.selectProviders(created.taskDirectory, [
-        { capability: "audio.tts", providerId: "jimeng-manual", mode: "manual" },
-      ]),
+      service.selectProviders(
+        created.taskDirectory,
+        REQUIRED_PROVIDER_CAPABILITIES.map(
+          (capability) => ({
+            capability,
+            providerId: "jimeng-manual",
+            mode: "manual" as const,
+          }),
+        ),
+      ),
     ).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
   });
 });

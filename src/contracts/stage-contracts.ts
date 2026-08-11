@@ -199,14 +199,29 @@ export const clipsStageContractSchema = z
         z
           .object({
             shotId: idSchema,
-            file: fileNameSchema,
+            file: fileNameSchema.optional(),
             durationMs: z.number().int().min(500).max(30_000),
             technicalPassed: z.boolean(),
             exception: textSchema.optional(),
           })
-          .strict(),
-      )
-      .min(1),
+          .strict()
+          .superRefine((clip, context) => {
+            if (!clip.file && !clip.exception) {
+              context.addIssue({
+                code: "custom",
+                path: ["file"],
+                message: "clip file is required unless a documented exception is present",
+              });
+            }
+            if (clip.technicalPassed && !clip.file) {
+              context.addIssue({
+                code: "custom",
+                path: ["technicalPassed"],
+                message: "a clip without a file cannot pass technical inspection",
+              });
+            }
+          }),
+      ),
     proxyAssemblyFile: fileNameSchema,
     technicalReportFile: fileNameSchema,
   })
@@ -226,18 +241,23 @@ export const audioStageContractSchema = z
             catalogVoice: z.boolean(),
           })
           .strict(),
-      )
-      .min(1),
+      ),
+    narrationVoice: z
+      .object({
+        voiceId: idSchema,
+        file: fileNameSchema,
+        catalogVoice: z.boolean(),
+      })
+      .strict()
+      .optional(),
     musicCues: z
       .array(
         z.object({ id: idSchema, file: fileNameSchema, startMs: z.number().int().nonnegative() }).strict(),
-      )
-      .min(1),
+      ),
     sfxCues: z
       .array(
         z.object({ id: idSchema, file: fileNameSchema, startMs: z.number().int().nonnegative() }).strict(),
-      )
-      .min(1),
+      ),
     mixPreviewFile: fileNameSchema,
     subtitleContentFile: fileNameSchema,
     pronunciationChecked: z.literal(true),

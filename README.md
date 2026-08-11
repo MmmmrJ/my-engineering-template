@@ -77,6 +77,7 @@ npm run cartoon -- providers complete-manual <task-id> --attempt <attempt-id> --
 npm run cartoon -- providers jobs <task-id> --json
 npm run cartoon -- providers poll <task-id> --attempt <attempt-id> --json
 npm run cartoon -- providers resume-job <task-id> --attempt <attempt-id> --request @request.json --json
+npm run cartoon -- providers import-output <task-id> --attempt <attempt-id> [--attempt <attempt-id> ...] --contract @stage-contract.json --metadata @metadata.json --json
 npm run cartoon -- providers cancel <task-id> --attempt <attempt-id> --json
 ```
 
@@ -108,13 +109,13 @@ Every new `submit` obtains a fresh provider estimate and binds it to one explici
 
 Known pricing must exactly match the mechanically calculated estimate. Unknown pricing must omit `estimatedCost`; task-scoped Manual Import uses the unknown form with `maximumCost: 0`. Polling or resuming the same attempt does not request confirmation again.
 
-Successful provider outputs are not stage artifacts yet. Temporary URLs are downloaded, MIME/size/hash checked, and archived under `output/<task-id>/provider-downloads/`; manual request/result packages live under `output/<task-id>/manual/`. Use `providers complete-manual` for user-exported platform files instead of writing result JSON by hand. Then import the archived API result, MCP result, or completed manual result so it becomes reviewable and recoverable:
+Successful provider outputs are not stage artifacts yet. Temporary URLs are downloaded, MIME/size/hash checked, and archived under `output/<task-id>/provider-downloads/`; manual request/result packages live under `output/<task-id>/manual/`. Use `providers complete-manual` for user-exported platform files instead of writing result JSON by hand. Then bind the complete archived output set to its successful durable attempt so it becomes reviewable and recoverable:
 
 ```powershell
-npm run cartoon -- import <task-id> --stage assets --file <path> --contract @stage-contract.json --metadata @metadata.json
+npm run cartoon -- providers import-output <task-id> --attempt <attempt-id> [--attempt <attempt-id> ...] --contract @stage-contract.json --metadata @metadata.json
 ```
 
-Every production import requires the stage-specific structured contract. `resume` also inspects `provider-jobs.jsonl` and returns the exact safe resume, poll, or archived-output import action before a new request may be created.
+Every production import requires the stage-specific structured contract and rights for every file (`rights` as a shared default or `fileRights` per file). Repeat `--attempt` to atomically assemble complete output sets from several terminal attempts prepared for the same stage revision. If provider archives reuse names such as `output-001.png`, supply metadata `fileNames` keyed by task-local source path to assign unique contract basenames. Provider job IDs cannot be asserted by ordinary import: `providers import-output` derives provider/model/job identity from `provider-jobs.jsonl` and verifies the archived paths, sizes, and hashes. `resume` returns the exact safe resume, poll, cancel-obsolete, or archived-output import action before a new request may be created.
 
 See [structured stage contracts](docs/STAGE_CONTRACTS.md) for the exact G1-G9 evidence model and an import example.
 

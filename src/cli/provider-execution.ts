@@ -215,6 +215,7 @@ export async function requireProviderSubmitEligibility(
   const state = await workflow.getState(taskId);
   const binding = requireFrozenProviderBinding(state, providerId, request);
   requireActionableStage(state, stage, request.capability);
+  await workflow.assertProviderSubmissionAllowed(taskId, stage);
   if (
     binding.mode === "manual" &&
     (confirmation.pricingStatus !== "unknown" || confirmation.maximumCost !== 0)
@@ -237,6 +238,7 @@ export async function requireProviderSubmitEligibility(
 export async function requireProviderResumeEligibility(
   workflow: WorkflowService,
   taskId: string,
+  attemptId: string,
   providerId: string,
   stage: WorkflowStage,
   request: ProviderSubmitRequest,
@@ -245,6 +247,7 @@ export async function requireProviderResumeEligibility(
   const state = await workflow.getState(taskId);
   const binding = requireFrozenProviderBinding(state, providerId, request);
   requireActionableStage(state, stage, request.capability);
+  await workflow.assertProviderAttemptRevision(taskId, attemptId, stage);
   return binding.request;
 }
 

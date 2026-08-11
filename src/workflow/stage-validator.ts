@@ -91,7 +91,9 @@ function validateScript(
   const characterIds = new Set(contract.characters.map((character) => character.id));
   let priorEnd = 0;
   for (const scene of contract.scenes) {
-    if (scene.startMs < priorEnd) throw invalidContract(`Scene ${scene.id} overlaps the prior scene.`);
+    if (scene.startMs !== priorEnd) {
+      throw invalidContract(`Scene ${scene.id} must start exactly when the prior scene ends.`);
+    }
     if (scene.endMs > contract.totalDurationMs) {
       throw invalidContract(`Scene ${scene.id} ends after the declared script duration.`);
     }
@@ -140,10 +142,21 @@ function validateAssets(
     throw invalidContract("Approved storyboard contract is invalid.");
   }
   uniqueIds(contract.assets.map((asset) => asset.id), "asset");
-  const supplied = new Set(contract.assets.map((asset) => asset.id));
+  sameIds(
+    storyboard.assetDefinitions.map((asset) => asset.id),
+    contract.assets.map((asset) => asset.id),
+    "asset inventory must exactly match the approved storyboard asset IDs",
+  );
+  const supplied = new Map(contract.assets.map((asset) => [asset.id, asset]));
   for (const expected of storyboard.assetDefinitions) {
-    if (!supplied.has(expected.id)) {
+    const actual = supplied.get(expected.id);
+    if (!actual) {
       throw invalidContract(`Asset inventory is missing storyboard asset ${expected.id}.`);
+    }
+    if (actual.type !== expected.type || actual.name !== expected.name) {
+      throw invalidContract(
+        `Asset ${expected.id} must preserve storyboard type ${expected.type} and name ${expected.name}.`,
+      );
     }
   }
   const assetFiles = contract.assets.map((asset) => asset.file);
@@ -170,6 +183,7 @@ function validateKeyframes(
     "keyframes must cover every approved storyboard shot exactly once",
   );
   const assetIds = new Set(assets.assets.map((asset) => asset.id));
+  const plannedAssets = new Map(storyboard.shots.map((shot) => [shot.id, shot.assetIds]));
   for (const frame of contract.frames) {
     if (!frame.continuityPassed) {
       throw invalidContract(`Keyframe ${frame.shotId} has an unresolved continuity failure.`);
@@ -179,6 +193,11 @@ function validateKeyframes(
         throw invalidContract(`Keyframe ${frame.shotId} references unknown asset ${assetId}.`);
       }
     }
+    sameIds(
+      plannedAssets.get(frame.shotId) ?? [],
+      frame.assetIds,
+      `Keyframe ${frame.shotId} must preserve the storyboard shot-to-asset dependency map`,
+    );
   }
   const frameFiles = contract.frames.map((frame) => frame.file);
   uniqueFiles(frameFiles, "keyframe image");
@@ -214,6 +233,12 @@ function validateClips(
   );
   const plannedDuration = new Map(storyboard.shots.map((shot) => [shot.id, shot.durationMs]));
   for (const clip of contract.clips) {
+    if (!clip.file && !clip.exception) {
+      throw invalidContract(`Clip ${clip.shotId} needs a file or documented exception.`);
+    }
+    if (!clip.file && clip.technicalPassed) {
+      throw invalidContract(`Clip ${clip.shotId} cannot pass technical inspection without a file.`);
+    }
     if (!clip.technicalPassed && !clip.exception) {
       throw invalidContract(`Clip ${clip.shotId} needs a passed check or documented exception.`);
     }
@@ -221,7 +246,7 @@ function validateClips(
       throw invalidContract(`Clip ${clip.shotId} duration differs from its storyboard by over 500ms.`);
     }
   }
-  const clipFiles = contract.clips.map((clip) => clip.file);
+  const clipFiles = contract.clips.flatMap((clip) => (clip.file ? [clip.file] : []));
   uniqueFiles(clipFiles, "shot clip");
   uniqueFiles([contract.proxyAssemblyFile, contract.technicalReportFile], "clip aggregate");
   disjointFiles(
@@ -247,13 +272,39 @@ function validateAudio(
   if (script.stage !== "script") throw invalidContract("Approved script contract is invalid.");
   uniqueIds(contract.dialogueVoiceMap.map((entry) => entry.characterId), "dialogue voice character");
   const characters = new Set(script.characters.map((character) => character.id));
+  const speakingCharacters = [
+    ...new Set(
+      script.scenes.flatMap((scene) => scene.dialogue.map((line) => line.characterId)),
+    ),
+  ];
+  sameIds(
+    speakingCharacters,
+    contract.dialogueVoiceMap.map((entry) => entry.characterId),
+    "dialogue voice map must cover every speaking script character exactly once",
+  );
+  const hasNarration = script.scenes.some((scene) => Boolean(scene.narration?.trim()));
+  if (hasNarration !== Boolean(contract.narrationVoice)) {
+    throw invalidContract(
+      hasNarration
+        ? "Audio contract requires a narration voice for narrated script scenes."
+        : "Audio contract must not add a narration voice when the script has no narration.",
+    );
+  }
   for (const entry of contract.dialogueVoiceMap) {
     if (!characters.has(entry.characterId)) {
       throw invalidContract(`Dialogue voice map references unknown character ${entry.characterId}.`);
     }
   }
+  uniqueIds(contract.musicCues.map((cue) => cue.id), "music cue");
+  uniqueIds(contract.sfxCues.map((cue) => cue.id), "SFX cue");
+  for (const cue of [...contract.musicCues, ...contract.sfxCues]) {
+    if (cue.startMs >= script.totalDurationMs) {
+      throw invalidContract(`Audio cue ${cue.id} starts outside the approved script duration.`);
+    }
+  }
   const audioFiles = [
     ...contract.dialogueVoiceMap.map((entry) => entry.file),
+    ...(contract.narrationVoice ? [contract.narrationVoice.file] : []),
     ...contract.musicCues.map((cue) => cue.file),
     ...contract.sfxCues.map((cue) => cue.file),
     contract.mixPreviewFile,

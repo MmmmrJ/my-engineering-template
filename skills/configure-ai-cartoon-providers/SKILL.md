@@ -29,17 +29,19 @@ npm run cartoon -- providers check
 npm run cartoon -- providers select <task-id> --provider manual --mode manual
 ```
 
-Selection freezes the profile for reproducibility. If a provider becomes unavailable later, report the blocked capability. V1 does not mutate the binding; offer retry, wait, the already-frozen manual route, or a replacement task.
+Selection may accumulate bindings until every required capability is present; the runtime then records one explicit profile freeze for reproducibility. Add optional capabilities before the last required binding. If a provider becomes unavailable later, report the blocked capability. V1 does not mutate the binding; offer retry, wait, the already-frozen manual route, or a replacement task.
 
 Freeze `render.timeline` to `local-ffmpeg` in an explicit binding map when local deterministic rendering is desired. Also include the optional `quality.inspect=local-ffmpeg:api` binding in that initial map when G9 QC will run through the provider-job surface; bindings cannot be added after production advances. The provider is zero-cost but still uses the normal known-price confirmation with `estimatedCost: 0`, `maximumCost: 0`, and the configured currency for each new submission.
 
 ## Validate manual and MCP paths
 
-Confirm that each non-API route can return a file plus durable metadata. Import its result through:
+Confirm that each non-API route can return a file plus durable metadata. After its provider attempt succeeds, import the verified output set through:
 
 ```powershell
-npm run cartoon -- import <task-id> --stage <stage-id> --file <path> --contract @stage-contract.json --metadata @metadata.json
+npm run cartoon -- providers import-output <task-id> --attempt <attempt-id> [--attempt <attempt-id> ...] --contract @stage-contract.json --metadata @metadata.json
 ```
+
+The metadata supplies stage rights (`rights` or per-file `fileRights`) but must not override provider identity, which comes from the durable ledger. Repeat `--attempt` only for complete terminal attempts targeting the same stage revision; use metadata `fileNames` to assign unique contract names when archives reuse generic basenames.
 
 Do not mark a manual or MCP profile healthy if request provenance, model/tool identity, rights notes, or output files cannot be retained.
 

@@ -72,4 +72,40 @@ describe("import metadata rights", () => {
     );
     await expect(readImportMetadata(unknown, root)).rejects.toThrow("unknown field");
   });
+
+  it("parses independent per-file rights records", async () => {
+    const root = await mkdtemp(join(tmpdir(), "cartoon-file-rights-"));
+    const path = join(root, "metadata.json");
+    const fileRights = {
+      "music.wav": {
+        basis: "licensed",
+        work: "Music cue",
+        rightsHolder: "Composer",
+        license: "Commercial sync license",
+        evidence: "license-1",
+        scope: "Worldwide episode distribution",
+        verifiedAt: "2026-08-10T01:02:03.000Z",
+      },
+      "voice.wav": {
+        basis: "original",
+        creator: "Performer",
+        declaration: "I created and control this recording.",
+      },
+    };
+    await writeFile(path, JSON.stringify({ fileRights }), "utf8");
+
+    await expect(readImportMetadata(path, root)).resolves.toMatchObject({ fileRights });
+  });
+
+  it("parses stable per-source contract filenames", async () => {
+    const root = await mkdtemp(join(tmpdir(), "cartoon-file-names-"));
+    const path = join(root, "metadata.json");
+    const fileNames = {
+      "/task/provider-downloads/attempt-a/output-001.png": "hero-reference.png",
+      "/task/provider-downloads/attempt-b/output-001.png": "villain-reference.png",
+    };
+    await writeFile(path, JSON.stringify({ fileNames }), "utf8");
+
+    await expect(readImportMetadata(path, root)).resolves.toMatchObject({ fileNames });
+  });
 });

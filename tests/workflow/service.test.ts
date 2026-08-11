@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  PROVIDER_CAPABILITIES,
   REQUIRED_PROVIDER_CAPABILITIES,
   STAGE_DIRECTORIES,
   WORKFLOW_STAGES,
@@ -310,6 +311,32 @@ describe("WorkflowService", () => {
         mode: "manual" as const,
       })),
     );
+    expect((await service.getState(taskDirectory)).providerProfileFreeze).toMatchObject({
+      frozenAt: FIXED_DATE.toISOString(),
+    });
+    expect(
+      JSON.parse(await readFile(join(taskDirectory, "provider-bindings.json"), "utf8")),
+    ).toMatchObject({
+      frozen: true,
+      profileFreeze: { frozenAt: FIXED_DATE.toISOString() },
+    });
+    await expect(
+      service.importArtifact(taskDirectory, {
+        stage: "assets",
+        sourceFiles: [source],
+        provider: {
+          providerId: "other-manual",
+          capability: "image.generate",
+        },
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
+    await expect(
+      service.selectProvider(taskDirectory, {
+        capability: "quality.inspect",
+        providerId: "manual",
+        mode: "manual",
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_TRANSITION" });
     const imported = await service.importArtifact(taskDirectory, {
       stage: "assets",
       sourceFiles: [source],
@@ -485,6 +512,18 @@ describe("WorkflowService", () => {
       const rights: RightsRecord | undefined =
         stage === "concept"
           ? ORIGINAL_RIGHTS
+          : stage === "script"
+            ? {
+                basis: "workflow-derived",
+                sourceArtifactIds: rightsSources.get("concept") ?? [],
+                declaration: "The script derives only from the approved original concept.",
+              }
+            : stage === "storyboard"
+              ? {
+                  basis: "workflow-derived",
+                  sourceArtifactIds: rightsSources.get("script") ?? [],
+                  declaration: "The storyboard derives only from the approved script.",
+                }
           : stage === "assets"
             ? PROVIDER_TERMS_RIGHTS
             : stage === "keyframes"
@@ -510,7 +549,13 @@ describe("WorkflowService", () => {
                         ],
                         declaration: "The edit combines only cleared clips and licensed audio.",
                       }
-                    : undefined;
+                    : stage === "qc"
+                      ? {
+                          basis: "workflow-derived",
+                          sourceArtifactIds: rightsSources.get("edit") ?? [],
+                          declaration: "QC derives only from the cleared approved edit.",
+                        }
+                      : undefined;
       const imported = await service.importArtifact(taskDirectory, {
         stage,
         sourceFiles: [source],
@@ -569,6 +614,11 @@ describe("WorkflowService", () => {
       stage: "qc",
       sourceFiles: [qcReport],
       aiLabel: COMPLETE_AI_LABEL,
+      rights: {
+        basis: "workflow-derived",
+        sourceArtifactIds: edit.artifacts.map((artifact) => artifact.artifactId),
+        declaration: "The final QC report derives only from the approved labeled edit.",
+      },
     });
     await service.review(taskDirectory, {
       target: { stage: "qc", revision: qc.revision },
@@ -609,6 +659,41 @@ describe("WorkflowService", () => {
     await expect(stat(join(taskDirectory, "final", "v002"))).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("rejects workflow-derived rights from a superseded unapproved revision", async () => {
+    const { taskDirectory } = await service.createTask({ ip: "Original", theme: "Current rights" });
+    const first = await service.importArtifact(taskDirectory, {
+      stage: "concept",
+      sourceFiles: [source],
+      rights: ORIGINAL_RIGHTS,
+    });
+    await service.review(taskDirectory, {
+      target: { stage: "concept", revision: first.revision },
+      decision: "revise",
+      feedback: "Replace the premise before approval.",
+    });
+    const second = await service.importArtifact(taskDirectory, {
+      stage: "concept",
+      sourceFiles: [source],
+      rights: ORIGINAL_RIGHTS,
+    });
+    await service.review(taskDirectory, {
+      target: { stage: "concept", revision: second.revision },
+      decision: "approve",
+    });
+
+    await expect(
+      service.importArtifact(taskDirectory, {
+        stage: "script",
+        sourceFiles: [source],
+        rights: {
+          basis: "workflow-derived",
+          sourceArtifactIds: first.artifacts.map((artifact) => artifact.artifactId),
+          declaration: "Invalidly derived from a rejected concept revision.",
+        },
+      }),
+    ).rejects.toMatchObject({ code: "RIGHTS_REQUIRED" });
   });
 
   it("fails export when any approved production artifact lacks rights", async () => {
@@ -665,7 +750,7 @@ function manualProviderFacade(): ProviderFacade {
         {
           id: "manual",
           name: "Manual Import",
-          capabilities: REQUIRED_PROVIDER_CAPABILITIES,
+          capabilities: PROVIDER_CAPABILITIES,
           configured: true,
         },
       ]),

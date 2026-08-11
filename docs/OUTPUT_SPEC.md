@@ -35,11 +35,11 @@ The numbered stage directory names and order are stable. Revisions increase mono
 - `events.jsonl`: append-only state-transition and invalidation history.
 - `artifacts.jsonl`: append-only artifact inventory and provenance ledger.
 - `provider-jobs.jsonl`: append-only prepared/submitted/polled provider attempt ledger used by unified resume.
-- `provider-bindings.json`: checked provider/model selection frozen before G4.
+- `provider-bindings.json`: checked provider/model selection plus an explicit `frozen` flag and freeze event identity before G4.
 - `generation/`: durable baseline G1-G3 review packets before their immutable revision copies.
 - `reviews/`: stage/revision decisions, feedback, targets, and review evidence.
 
-Each artifact record contains its ID, type, relative path, SHA-256 hash, MIME type, byte size, source, stage and revision, provider/model/job identity, prompt hash and seed when applicable, rights/provenance, timestamps, and cost when known. Use these records instead of discovering artifacts by filename.
+Each artifact record contains its ID, type, relative path, SHA-256 hash, MIME type, byte size, source, stage and revision, provider/attempt/model/job identity, prompt hash and seed when applicable, allowlisted request/result receipt metadata, rights/provenance, timestamps, and cost when known. Prompt bodies and unknown provider metadata are not copied into the ledger. Use these records instead of discovering artifacts by filename.
 
 For selective repair, artifact metadata may declare stable `targetIds` (the shots/assets represented) and `dependsOnIds` (IDs that invalidate an aggregate such as a contact sheet, proxy assembly, or final timeline). A scoped replacement revision copies forward only unaffected immutable artifacts and records `derivedFromArtifactId`; visual-only shot repair does not invalidate an already approved audio stage.
 

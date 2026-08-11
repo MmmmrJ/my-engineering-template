@@ -162,9 +162,13 @@ it.skipIf(!HAS_MEDIA_TOOLS)(
       const rights: RightsRecord | undefined =
         stage === "concept"
           ? ORIGINAL_RIGHTS
-          : stage === "assets"
-            ? PROVIDER_TERMS_RIGHTS
-            : stage === "keyframes"
+          : stage === "script"
+            ? derivedRights(rightsSources.get("concept"), "Approved script derives from the cleared concept.")
+            : stage === "storyboard"
+              ? derivedRights(rightsSources.get("script"), "Approved storyboard derives from the cleared script.")
+              : stage === "assets"
+                ? PROVIDER_TERMS_RIGHTS
+                : stage === "keyframes"
               ? derivedRights(rightsSources.get("assets"), "Approved keyframes derive from cleared assets.")
               : stage === "clips"
                 ? derivedRights(rightsSources.get("keyframes"), "Approved clips derive from cleared keyframes.")
@@ -178,7 +182,9 @@ it.skipIf(!HAS_MEDIA_TOOLS)(
                         ],
                         "The final edit combines only cleared clips and licensed audio.",
                       )
-                    : undefined;
+                    : stage === "qc"
+                      ? derivedRights(rightsSources.get("edit"), "QC evidence derives from the approved edit.")
+                      : undefined;
       const imported = await service.importArtifact(taskDirectory, {
         stage,
         sourceFiles,

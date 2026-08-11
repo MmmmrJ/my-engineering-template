@@ -27,6 +27,8 @@ export interface CreateTaskResult {
 export interface ProviderArtifactMetadata {
   providerId: string;
   capability: ProviderCapability;
+  /** Durable task-local provider attempt that produced these archived files. */
+  attemptId?: string;
   jobId?: string;
   model?: string;
   promptHash?: string;
@@ -46,7 +48,14 @@ export interface ImportArtifactInput {
   summary?: string;
   mediaType?: string;
   rights?: RightsRecord;
+  /** Per-file rights override keyed by source path or basename. */
+  fileRights?: Readonly<Record<string, RightsRecord>>;
+  /** Stable unique contract filename keyed by source path or unambiguous basename. */
+  fileNames?: Readonly<Record<string, string>>;
+  /** One durable attempt for all files; retained for transport compatibility. */
   provider?: ProviderArtifactMetadata;
+  /** Durable attempts whose complete output sets are atomically assembled into this revision. */
+  providerAttempts?: readonly ProviderArtifactMetadata[];
   aiLabel?: AiLabelRecord;
   voiceCloneConsent?: VoiceCloneConsentRecord;
   /** Default scope applied to each imported file unless fileScopes overrides it. */

@@ -35,6 +35,8 @@ The example also enables task-scoped manual profiles for 即梦 AI, 可灵 AI, L
 
 Complete a queued manual attempt with `cartoon providers complete-manual <task-id> --attempt <attempt-id> --result @result.json`. This is the only supported way to create the matching manual result package; it verifies file size, signature, kind, and optional expected hash before copying outputs into task scope.
 
+After completion, use `cartoon providers import-output <task-id> --attempt <attempt-id> [--attempt <attempt-id> ...] --contract @stage-contract.json --metadata @metadata.json`. The command atomically binds every named complete archived output set to the current stage revision and rejects provider/model/job overrides; metadata must provide rights for every imported file. Repeated generic archive basenames require unique metadata `fileNames` mappings.
+
 `local-ffmpeg` exposes `render.timeline` and `quality.inspect`. Its versioned request contracts support timeline MP4 assembly, PNG contact sheets, and a hash-bound final-delivery QC report. Every path is relative to one task directory; outputs are immutable and cannot escape `output/<task-id>/`.
 
 ## Failure handling
@@ -45,3 +47,4 @@ Complete a queued manual attempt with `cartoon providers complete-manual <task-i
 - Manual-only capability: document the handoff and validate metadata import before freezing.
 - Outage or quota failure after freeze: stop, retain provider errors, and ask the user whether to wait, retry, use the already-frozen manual route, or create a replacement task. V1 does not mutate a frozen binding.
 - Model drift: pin a concrete model/version when supported and record the observed model identifier in every result.
+- Existing attempt: finish, fail, or cancel the current nonterminal attempt before submitting another; successful attempts for the same revision may accumulate for one atomic import.

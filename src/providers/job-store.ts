@@ -3,6 +3,7 @@ import { mkdir, open, readFile, stat, truncate, unlink } from "node:fs/promises"
 import { resolve } from "node:path";
 import type {
   Clock,
+  JsonObject,
   JsonValue,
   ProviderAdapter,
   ProviderCapability,
@@ -28,6 +29,8 @@ export interface StoredProviderAttempt {
   readonly providerId: string;
   readonly capability: ProviderCapability;
   readonly model?: string;
+  readonly observedModel?: string;
+  readonly requestMetadata?: JsonObject;
   readonly requestSha256: string;
   readonly idempotencyKey: string;
   readonly stage?: string;
@@ -41,6 +44,7 @@ export interface StoredProviderAttempt {
   readonly progress?: number;
   readonly retryAfterMs?: number;
   readonly outputs?: readonly ProviderOutput[];
+  readonly jobMetadata?: JsonObject;
   readonly error?: ProviderJobError;
   readonly revision: number;
 }
@@ -57,6 +61,7 @@ interface PreparedEvent extends LedgerEventBase {
   readonly providerId: string;
   readonly capability: ProviderCapability;
   readonly model?: string;
+  readonly requestMetadata?: JsonObject;
   readonly requestSha256: string;
   readonly idempotencyKey: string;
   readonly stage?: string;
@@ -71,9 +76,11 @@ interface JobEvent extends LedgerEventBase {
   readonly capability: ProviderCapability;
   readonly externalJobId: string;
   readonly state: ProviderJobState;
+  readonly model?: string;
   readonly progress?: number;
   readonly retryAfterMs?: number;
   readonly outputs?: readonly ProviderOutput[];
+  readonly metadata?: JsonObject;
   readonly error?: ProviderJobError;
 }
 
@@ -204,6 +211,10 @@ export class ProviderJobStore {
     }
     validateAttemptContext(context);
     validatePricingBinding(providerId, request, context);
+    const requestMetadata = sanitizeAuditMetadata({
+      ...(request.metadata ?? {}),
+      ...request.input,
+    });
     const event: PreparedEvent = {
       schemaVersion: 1,
       eventId: randomUUID(),
@@ -213,6 +224,7 @@ export class ProviderJobStore {
       providerId,
       capability: request.capability,
       ...(request.model ? { model: request.model } : {}),
+      ...(requestMetadata ? { requestMetadata } : {}),
       requestSha256: hashRequest(request),
       idempotencyKey,
       stage: context.stage,
@@ -423,6 +435,12 @@ export class ProviderJobStore {
         `Provider job id ${job.remoteJobId} does not match durable job ${existing.externalJobId}`,
       );
     }
+    if (existing.model && job.model && existing.model !== job.model) {
+      throw new ProviderConfigurationError(
+        `Provider observed model ${job.model} does not match frozen request model ${existing.model}`,
+      );
+    }
+    const metadata = sanitizeAuditMetadata(job.metadata);
     const event: JobEvent = {
       schemaVersion: 1,
       eventId: randomUUID(),
@@ -433,9 +451,11 @@ export class ProviderJobStore {
       capability: job.capability,
       externalJobId: job.remoteJobId,
       state: job.state,
+      ...(job.model ? { model: job.model } : {}),
       ...(job.progress === undefined ? {} : { progress: job.progress }),
       ...(job.retryAfterMs === undefined ? {} : { retryAfterMs: job.retryAfterMs }),
       ...(job.outputs?.length ? { outputs: job.outputs.map(sanitizeOutput) } : {}),
+      ...(metadata ? { metadata } : {}),
       ...(job.error ? { error: sanitizeError(job.error, (text) => this.#redact(text)) } : {}),
     };
     if (sameJobProjection(existing, event)) return existing;
@@ -674,6 +694,7 @@ export class ProviderJobStore {
         providerId: event.providerId,
         capability: event.capability,
         ...(event.model ? { model: event.model } : {}),
+        ...(event.requestMetadata ? { requestMetadata: event.requestMetadata } : {}),
         requestSha256: event.requestSha256,
         idempotencyKey: event.idempotencyKey,
         ...(event.stage ? { stage: event.stage } : {}),
@@ -707,9 +728,11 @@ export class ProviderJobStore {
       updatedAt: event.at,
       state: event.state,
       externalJobId: event.externalJobId,
+      ...(event.model ? { observedModel: event.model } : {}),
       ...(event.progress === undefined ? {} : { progress: event.progress }),
       retryAfterMs: event.retryAfterMs,
       ...(event.outputs ? { outputs: event.outputs } : {}),
+      ...(event.metadata ? { jobMetadata: event.metadata } : {}),
       error: event.error,
       revision: existing.revision + 1,
     });
@@ -747,6 +770,7 @@ function stableJson(value: JsonValue | undefined): string {
 }
 
 function sanitizeOutput(output: ProviderOutput): ProviderOutput {
+  const metadata = sanitizeAuditMetadata(output.metadata);
   return {
     kind: output.kind,
     ...(output.localPath ? { localPath: output.localPath } : {}),
@@ -754,7 +778,37 @@ function sanitizeOutput(output: ProviderOutput): ProviderOutput {
     ...(output.mimeType ? { mimeType: output.mimeType } : {}),
     ...(output.sizeBytes === undefined ? {} : { sizeBytes: output.sizeBytes }),
     ...(output.sha256 ? { sha256: output.sha256 } : {}),
+    ...(metadata ? { metadata } : {}),
   };
+}
+
+const PROVIDER_AUDIT_METADATA_KEYS = new Set([
+  "createdAt",
+  "durationMs",
+  "fps",
+  "generationId",
+  "height",
+  "model",
+  "requestId",
+  "resourceId",
+  "sampleRate",
+  "seed",
+  "taskId",
+  "voiceId",
+  "width",
+  "workflowId",
+  "workflowVersion",
+]);
+
+function sanitizeAuditMetadata(metadata: JsonObject | undefined): JsonObject | undefined {
+  if (!metadata) return undefined;
+  const sanitized: JsonObject = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (PROVIDER_AUDIT_METADATA_KEYS.has(key)) sanitized[key] = value;
+  }
+  if (Object.keys(sanitized).length === 0) return undefined;
+  assertNoInlineSecrets(sanitized, "provider.auditMetadata");
+  return sanitized;
 }
 
 function sanitizeError(
@@ -774,7 +828,10 @@ function sameJobProjection(attempt: StoredProviderAttempt, event: JobEvent): boo
     attempt.state === event.state &&
     attempt.progress === event.progress &&
     attempt.retryAfterMs === event.retryAfterMs &&
+    attempt.observedModel === (event.model ?? attempt.observedModel) &&
     JSON.stringify(attempt.outputs ?? []) === JSON.stringify(event.outputs ?? []) &&
+    JSON.stringify(attempt.jobMetadata ?? null) ===
+      JSON.stringify(event.metadata ?? attempt.jobMetadata ?? null) &&
     JSON.stringify(attempt.error ?? null) === JSON.stringify(event.error ?? null)
   );
 }

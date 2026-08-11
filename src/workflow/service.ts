@@ -4,6 +4,7 @@ import {
   mkdir,
   open,
   readFile,
+  realpath,
   rename,
   rm,
   stat,
@@ -32,8 +33,10 @@ import type {
   ImportArtifactResult,
   ListArtifactsFilter,
   NewWorkflowEvent,
+  ProviderArtifactMetadata,
   ProviderCapability,
   ProviderFacade,
+  RightsRecord,
   ResumeResult,
   ReviewRevisionInput,
   SelectProviderInput,
@@ -162,6 +165,41 @@ export class WorkflowService {
     return new FileEventStore(this.resolveTaskDirectory(task)).getState();
   }
 
+  async assertProviderSubmissionAllowed(task: string, stage: WorkflowStage): Promise<void> {
+    const taskDirectory = this.resolveTaskDirectory(task);
+    const state = await new FileEventStore(taskDirectory).getState();
+    const expectedRevision = state.stages[stage].revisions.length + 1;
+    const outstanding = (await this.providerJobReader(taskDirectory)).find((attempt) =>
+      ["prepared", "queued", "running", "failed_retryable"].includes(attempt.state),
+    );
+    if (outstanding) {
+      const target = `${outstanding.stage ?? "unknown"}/${versionLabel(outstanding.stageRevision ?? 0)}`;
+      throw new WorkflowError(
+        "INVALID_TRANSITION",
+        `Provider attempt ${outstanding.attemptId} for ${target} must be resumed, polled, or cancelled before starting ${stage}/${versionLabel(expectedRevision)}.`,
+      );
+    }
+  }
+
+  async assertProviderAttemptRevision(
+    task: string,
+    attemptId: string,
+    stage: WorkflowStage,
+  ): Promise<void> {
+    const taskDirectory = this.resolveTaskDirectory(task);
+    const state = await new FileEventStore(taskDirectory).getState();
+    const attempt = (await this.providerJobReader(taskDirectory)).find(
+      (candidate) => candidate.attemptId === attemptId,
+    );
+    const expectedRevision = state.stages[stage].revisions.length + 1;
+    if (!attempt || attempt.stage !== stage || attempt.stageRevision !== expectedRevision) {
+      throw new WorkflowError(
+        "INVALID_TRANSITION",
+        `Provider attempt ${attemptId} does not target current ${stage}/${versionLabel(expectedRevision)}.`,
+      );
+    }
+  }
+
   async resume(task: string): Promise<ResumeResult> {
     const taskDirectory = this.resolveTaskDirectory(task);
     const state = await new FileEventStore(taskDirectory).getState();
@@ -258,9 +296,10 @@ export class WorkflowService {
         `${stage} is not the current actionable stage.`,
       );
     }
-    if (stage === "concept") {
-      validateConceptRights(input.rights);
-    }
+    const generatedRights =
+      stage === "concept"
+        ? validateConceptRights(input.rights)
+        : workflowDerivedRightsForGeneratedStage(state, stage);
     const stageState = state.stages[stage];
     if (stageState.status === "awaiting_review" || stageState.status === "approved") {
       throw new WorkflowError(
@@ -296,7 +335,7 @@ export class WorkflowService {
       sourceFiles: [sourcePath],
       stageContract: draft.contract,
       summary: draft.summary,
-      ...(input.rights ? { rights: input.rights } : {}),
+      rights: generatedRights,
     });
     const generatedArtifact = imported.artifacts.find(
       (artifact) => artifact.provenance.source.sourceUri === sourcePath,
@@ -314,31 +353,31 @@ export class WorkflowService {
     state: TaskState,
     activeStage: WorkflowStage,
   ): Promise<ResumeResult["action"] | undefined> {
+    const expectedRevision = state.stages[activeStage].revisions.length + 1;
     const attempts = (await this.providerJobReader(taskDirectory))
       .filter((attempt) => attempt.stage === activeStage && isWorkflowStage(attempt.stage))
       .sort((left, right) => left.preparedAt.localeCompare(right.preparedAt));
-    for (const attempt of attempts) {
-      if (
-        attempt.state === "succeeded" &&
-        attempt.outputs?.some((output) => output.localPath || output.archivedPath) &&
-        !Object.values(state.artifacts).some(
-          (artifact) =>
-            artifact.jobId === attempt.externalJobId ||
-            artifact.provenance.metadata?.providerAttemptId === attempt.attemptId,
-        )
-      ) {
-        return {
-          type: "import-provider-output",
-          attemptId: attempt.attemptId,
-          providerId: attempt.providerId,
-          capability: attempt.capability,
-          stage: activeStage,
-          ...(attempt.externalJobId ? { jobId: attempt.externalJobId } : {}),
-          files: attempt.outputs.flatMap((output) =>
-            output.localPath ? [output.localPath] : output.archivedPath ? [output.archivedPath] : [],
-          ),
-        };
-      }
+    const obsolete = attempts.find(
+      (attempt) =>
+        attempt.stageRevision !== expectedRevision &&
+        ["prepared", "queued", "running", "failed_retryable"].includes(attempt.state),
+    );
+    if (obsolete) {
+      return {
+        type: "cancel-provider-job",
+        attemptId: obsolete.attemptId,
+        providerId: obsolete.providerId,
+        capability: obsolete.capability,
+        stage: activeStage,
+        state: obsolete.state as "prepared" | "queued" | "running" | "failed_retryable",
+        reason: "obsolete-revision",
+      };
+    }
+    const currentAttempts = attempts.filter(
+      (attempt) => attempt.stageRevision === expectedRevision,
+    );
+    for (const attempt of currentAttempts) {
+      if (attempt.state === "succeeded") continue;
       if (
         (attempt.state === "prepared" || attempt.state === "failed_retryable") &&
         !attempt.externalJobId
@@ -367,6 +406,50 @@ export class WorkflowService {
         };
       }
     }
+    const succeeded = currentAttempts.filter(
+      (attempt) =>
+        attempt.state === "succeeded" &&
+        !Object.values(state.artifacts).some(
+          (artifact) => artifact.providerAttemptId === attempt.attemptId,
+        ),
+    );
+    if (succeeded.length > 0) {
+      const expectedFileCount = succeeded.reduce(
+        (count, attempt) => count + (attempt.outputs?.length ?? 0),
+        0,
+      );
+      const files = (
+        await Promise.all(
+          succeeded.flatMap((attempt) =>
+            (attempt.outputs ?? []).map((output) =>
+              firstExistingProviderOutputPath(output.localPath, output.archivedPath),
+            ),
+          ),
+        )
+      ).filter((path): path is string => path !== undefined);
+      if (
+        succeeded.some((attempt) => !attempt.outputs?.length) ||
+        files.length !== expectedFileCount
+      ) {
+        throw new WorkflowError(
+          "ARTIFACT_NOT_FOUND",
+          `Succeeded provider attempt output archives are incomplete for ${succeeded.map((attempt) => attempt.attemptId).join(", ")}.`,
+        );
+      }
+      const first = succeeded[0] as StoredProviderAttempt;
+      return {
+        type: "import-provider-output",
+        attemptId: first.attemptId,
+        ...(succeeded.length > 1
+          ? { attemptIds: succeeded.map((attempt) => attempt.attemptId) }
+          : {}),
+        providerId: first.providerId,
+        capability: first.capability,
+        stage: activeStage,
+        ...(first.externalJobId ? { jobId: first.externalJobId } : {}),
+        files,
+      };
+    }
     return undefined;
   }
 
@@ -378,6 +461,36 @@ export class WorkflowService {
     }
     const sourceFiles = input.sourceFiles.map((path) => resolve(cleanText(path, "sourceFiles")));
     await Promise.all(sourceFiles.map(validateSourceFileSignature));
+    const fileNamesBySource = normalizeImportFileNames(input.fileNames, sourceFiles);
+    const rightsBySource = normalizeImportRights(
+      input,
+      sourceFiles,
+      this.legacyUnstructuredImportsForTests,
+    );
+    if (input.provider && input.providerAttempts) {
+      throw new WorkflowError(
+        "INVALID_INPUT",
+        "Use provider for one source identity or providerAttempts for an atomic durable-attempt assembly, not both.",
+      );
+    }
+    if (input.providerAttempts?.length === 0) {
+      throw new WorkflowError("INVALID_INPUT", "providerAttempts must not be empty.");
+    }
+    const durableProviderInputs = input.providerAttempts
+      ? [...input.providerAttempts]
+      : input.provider?.attemptId
+        ? [input.provider]
+        : [];
+    const providerImports = durableProviderInputs.length
+      ? await this.validateProviderAttempts(taskDirectory, input.stage, durableProviderInputs, sourceFiles)
+      : undefined;
+    if (input.provider?.jobId && !input.provider.attemptId) {
+      throw new WorkflowError(
+        "INVALID_TRANSITION",
+        "Provider job imports require attemptId and must match a succeeded durable provider attempt.",
+      );
+    }
+    const defaultProviderMetadata = providerImports ? undefined : input.provider;
     const defaultTargetIds = normalizeIds(input.targetIds, "targetIds");
     const defaultDependsOnIds = normalizeIds(input.dependsOnIds, "dependsOnIds");
     const fileScopes = normalizeFileScopes(input.fileScopes);
@@ -416,12 +529,6 @@ export class WorkflowService {
       cleanText(input.aiLabel.label, "aiLabel.label");
       cleanText(input.aiLabel.method, "aiLabel.method");
     }
-    const rights =
-      input.stage === "concept"
-        ? validateConceptRights(input.rights)
-        : input.rights
-          ? validateRightsRecord(input.rights)
-          : undefined;
     const store = new FileEventStore(taskDirectory);
 
     const transaction = await store.transact(async (state) => {
@@ -439,11 +546,51 @@ export class WorkflowService {
           );
         }
       }
-      if (input.provider) {
-        assertProviderMatchesBinding(state, input.provider.capability, input.provider.providerId);
+      if (defaultProviderMetadata) {
+        assertProviderMatchesBinding(
+          state,
+          defaultProviderMetadata.capability,
+          defaultProviderMetadata.providerId,
+          defaultProviderMetadata.model,
+        );
       }
 
       const stage = state.stages[input.stage];
+      const revision = stage.revisions.length + 1;
+      const suppliedAttemptIds = new Set(
+        (providerImports?.attempts ?? []).map((attempt) => attempt.attemptId),
+      );
+      const omittedSucceededAttempts = (providerImports?.succeededAttempts ?? []).filter(
+        (attempt) =>
+          attempt.stageRevision === revision &&
+          !suppliedAttemptIds.has(attempt.attemptId) &&
+          !Object.values(state.artifacts).some(
+            (artifact) => artifact.providerAttemptId === attempt.attemptId,
+          ),
+      );
+      if (omittedSucceededAttempts.length > 0) {
+        throw new WorkflowError(
+          "INVALID_TRANSITION",
+          `All successful provider attempts for ${input.stage}/${versionLabel(revision)} must be imported together; missing ${omittedSucceededAttempts.map((attempt) => attempt.attemptId).join(", ")}.`,
+        );
+      }
+      for (const attempt of providerImports?.attempts ?? []) {
+        if (attempt.stageRevision !== revision) {
+          throw new WorkflowError(
+            "INVALID_TRANSITION",
+            `Provider attempt ${attempt.attemptId} targets ${input.stage}/${versionLabel(attempt.stageRevision ?? 0)}, not the current ${versionLabel(revision)} revision.`,
+          );
+        }
+        assertProviderMatchesBinding(
+          state,
+          attempt.capability,
+          attempt.providerId,
+          attempt.observedModel ?? attempt.model,
+        );
+      }
+      for (const rights of rightsBySource.values()) {
+        if (rights) validateImportRightsLineage(state, input.stage, rights);
+      }
       const replacementTargetIds = requestedTargetIds(stage);
       const previousRevision = stage.currentRevision
         ? stage.revisions[stage.currentRevision - 1]
@@ -460,7 +607,7 @@ export class WorkflowService {
             stage: input.stage,
             contract: input.stageContract,
             state,
-            sourceFiles: [...sourceFiles, ...carriedFileNames],
+            sourceFiles: [...fileNamesBySource.values(), ...carriedFileNames],
           })
         : this.legacyUnstructuredImportsForTests
           ? undefined
@@ -470,7 +617,6 @@ export class WorkflowService {
                 `A structured ${input.stage} stage contract is required.`,
               );
             })();
-      const revision = stage.revisions.length + 1;
       if (revision > 999) {
         throw new WorkflowError("INVALID_TRANSITION", `${input.stage} has reached v999.`);
       }
@@ -485,13 +631,19 @@ export class WorkflowService {
       const artifacts: ArtifactRecord[] = [];
       for (const [index, sourceFile] of sourceFiles.entries()) {
         const sourceStat = await statFile(sourceFile);
-        const fileName = `${String(index + 1).padStart(2, "0")}-${safeFileName(sourceFile)}`;
+        const logicalFileName = fileNamesBySource.get(sourceFile);
+        invariant(logicalFileName, `Logical filename is missing for ${sourceFile}.`);
+        const fileName = `${String(index + 1).padStart(2, "0")}-${logicalFileName}`;
         const destination = join(revisionDirectory, fileName);
         const sourceHash = await sha256File(sourceFile);
         await copyImmutable(sourceFile, destination, sourceHash);
         const artifactId = safeIdentifier(this.idGenerator("artifact"));
         const relativePath = relative(taskDirectory, destination).split(sep).join("/");
-        const provider = input.provider;
+        const providerSource = providerImports?.bySource.get(sourceFile);
+        const provider = providerSource?.metadata ?? defaultProviderMetadata;
+        const providerAttempt = providerSource?.attempt;
+        const providerOutput = providerSource?.output;
+        const rights = rightsBySource.get(sourceFile);
         const scope = fileScopes.get(sourceFile) ?? fileScopes.get(basename(sourceFile));
         const targetIds = scope?.targetIds ?? defaultTargetIds;
         const dependsOnIds = scope?.dependsOnIds ?? defaultDependsOnIds;
@@ -505,6 +657,7 @@ export class WorkflowService {
           bytes: sourceStat.size,
           sha256: sourceHash,
           ...(provider?.providerId ? { providerId: provider.providerId } : {}),
+          ...(provider?.attemptId ? { providerAttemptId: provider.attemptId } : {}),
           ...(provider?.model ? { model: provider.model } : {}),
           ...(provider?.jobId ? { jobId: provider.jobId } : {}),
           ...(provider?.promptHash ? { promptHash: provider.promptHash } : {}),
@@ -525,7 +678,38 @@ export class WorkflowService {
                 }
               : { kind: "local-file", sourceUri: sourceFile },
             importedAt,
-            ...(input.metadata ? { metadata: structuredClone(input.metadata) } : {}),
+            ...(
+              input.metadata || providerAttempt || providerOutput?.metadata
+                ? {
+                    metadata: {
+                      ...(input.metadata ?? {}),
+                      ...(providerAttempt
+                        ? {
+                            providerAttemptId: providerAttempt.attemptId,
+                            providerRequestSha256: providerAttempt.requestSha256,
+                            providerEstimateSha256: providerAttempt.pricingSnapshot.estimateSha256,
+                            providerIdempotencyKey: providerAttempt.idempotencyKey,
+                            providerPricingStatus: providerAttempt.pricingSnapshot.pricingStatus,
+                            providerConfirmationReference:
+                              providerAttempt.costConfirmation.confirmationReference,
+                            ...(providerAttempt.requestMetadata
+                              ? { providerRequestMetadata: providerAttempt.requestMetadata }
+                              : {}),
+                            ...(providerAttempt.observedModel
+                              ? { providerObservedModel: providerAttempt.observedModel }
+                              : {}),
+                            ...(providerAttempt.jobMetadata
+                              ? { providerJobMetadata: providerAttempt.jobMetadata }
+                              : {}),
+                            ...(providerOutput?.metadata
+                              ? { providerOutputMetadata: providerOutput.metadata }
+                              : {}),
+                          }
+                        : {}),
+                    },
+                  }
+                : {}
+            ),
           },
           ...(input.aiLabel ? { aiLabel: structuredClone(input.aiLabel) } : {}),
           ...(input.voiceCloneConsent
@@ -729,6 +913,7 @@ export class WorkflowService {
       }
       if (mode === "api" || mode === "manual") {
         const snapshot = await this.validateProvider(input.capability, input.providerId);
+        validateAdvertisedProviderModel(snapshot.descriptor, input);
         selections.push({
           ...input,
           mode,
@@ -744,6 +929,7 @@ export class WorkflowService {
       } else if (mode === "mcp") {
         assertMcpBindingEvidence(input);
         const descriptor = await this.validateMcpProvider(input);
+        if (descriptor) validateAdvertisedProviderModel(descriptor, input);
         selections.push({
           ...input,
           mode,
@@ -769,6 +955,16 @@ export class WorkflowService {
           "Provider bindings may only be frozen after storyboard approval.",
         );
       }
+      if (
+        state.providerProfileFreeze ||
+        missingProviders(state).length === 0 ||
+        state.stages.assets.revisions.length > 0
+      ) {
+        throw new WorkflowError(
+          "INVALID_TRANSITION",
+          "The complete provider profile is already frozen and cannot be extended or replaced.",
+        );
+      }
       const events: WorkflowEvent[] = [];
       for (const input of selections) {
         if (state.providers[input.capability]) {
@@ -788,6 +984,17 @@ export class WorkflowService {
             ...(input.metadata ? { metadata: structuredClone(input.metadata) } : {}),
           }),
         );
+      }
+      const selectedCapabilities = new Set<ProviderCapability>([
+        ...(Object.keys(state.providers) as ProviderCapability[]),
+        ...selections.map((selection) => selection.capability),
+      ]);
+      if (
+        REQUIRED_PROVIDER_CAPABILITIES.every((capability) =>
+          selectedCapabilities.has(capability),
+        )
+      ) {
+        events.push(this.event({ type: "provider.profile_frozen" }));
       }
       return { events, result: undefined };
     });
@@ -1031,6 +1238,146 @@ export class WorkflowService {
     return { descriptor, health: selected };
   }
 
+  private async validateProviderAttempts(
+    taskDirectory: string,
+    stage: WorkflowStage,
+    providers: readonly ProviderArtifactMetadata[],
+    sourceFiles: readonly string[],
+  ): Promise<ValidatedProviderImports> {
+    const attemptIds = providers.map((provider) => {
+      if (!provider.attemptId) {
+        throw new WorkflowError(
+          "INVALID_INPUT",
+          "Every providerAttempts entry requires attemptId.",
+        );
+      }
+      return cleanText(provider.attemptId, "providerAttempts.attemptId");
+    });
+    if (new Set(attemptIds).size !== attemptIds.length) {
+      throw new WorkflowError("INVALID_INPUT", "providerAttempts contains a duplicate attempt ID.");
+    }
+    const ledger = await this.providerJobReader(taskDirectory);
+    const taskRoot = await realpath(taskDirectory);
+    const unmatchedSources = await Promise.all(
+      sourceFiles.map(async (sourceFile) => ({
+        sourceFile,
+        canonical: await realpath(sourceFile),
+      })),
+    );
+    for (const source of unmatchedSources) {
+      assertCanonicalTaskChild(taskRoot, source.canonical, "provider output");
+    }
+    const bySource = new Map<string, ValidatedProviderSource>();
+    const attempts: StoredProviderAttempt[] = [];
+
+    for (const [providerIndex, provider] of providers.entries()) {
+      const attemptId = attemptIds[providerIndex] as string;
+      const attempt = ledger.find((candidate) => candidate.attemptId === attemptId);
+      if (!attempt) {
+        throw new WorkflowError(
+          "INVALID_TRANSITION",
+          `Provider attempt ${attemptId} does not exist in this task ledger.`,
+        );
+      }
+      if (attempt.state !== "succeeded") {
+        throw new WorkflowError(
+          "INVALID_TRANSITION",
+          `Provider attempt ${attempt.attemptId} cannot be imported while it is ${attempt.state}.`,
+        );
+      }
+      const observedModel = attempt.observedModel ?? attempt.model;
+      if (
+        provider.promptHash !== undefined ||
+        provider.seed !== undefined ||
+        provider.sourceUri !== undefined ||
+        provider.cost !== undefined
+      ) {
+        throw new WorkflowError(
+          "INVALID_INPUT",
+          `Provider provenance for durable attempt ${attempt.attemptId} is derived from the ledger and cannot be overridden.`,
+        );
+      }
+      if (
+        attempt.stage !== stage ||
+        attempt.providerId !== provider.providerId ||
+        attempt.capability !== provider.capability ||
+        (provider.model !== undefined && observedModel !== provider.model) ||
+        (provider.jobId !== undefined && attempt.externalJobId !== provider.jobId)
+      ) {
+        throw new WorkflowError(
+          "INVALID_TRANSITION",
+          `Provider metadata does not match durable attempt ${attempt.attemptId}.`,
+        );
+      }
+      const outputs = attempt.outputs ?? [];
+      if (
+        outputs.length === 0 ||
+        outputs.some(
+          (output) =>
+            (!output.localPath && !output.archivedPath) ||
+            output.sizeBytes === undefined ||
+            output.sha256 === undefined,
+        )
+      ) {
+        throw new WorkflowError(
+          "INVALID_TRANSITION",
+          `Provider attempt ${attempt.attemptId} must expose a complete hash-bound output set.`,
+        );
+      }
+
+      for (const output of outputs) {
+        const candidatePaths = [output.localPath, output.archivedPath].filter(
+          (path): path is string => path !== undefined,
+        );
+        const canonicalCandidates = await Promise.all(
+          candidatePaths.map((path) => realpath(resolve(path)).catch(() => undefined)),
+        );
+        const matchIndex = unmatchedSources.findIndex((source) =>
+          canonicalCandidates.includes(source.canonical),
+        );
+        if (matchIndex < 0) {
+          throw new WorkflowError(
+            "INVALID_TRANSITION",
+            `The complete output set for provider attempt ${attempt.attemptId} was not supplied.`,
+          );
+        }
+        const [matched] = unmatchedSources.splice(matchIndex, 1);
+        invariant(matched, "Matched provider output disappeared.");
+        const details = await stat(matched.canonical);
+        if (
+          output.sizeBytes !== details.size ||
+          output.sha256?.toLowerCase() !== (await sha256File(matched.canonical)).toLowerCase()
+        ) {
+          throw new WorkflowError(
+            "INVALID_TRANSITION",
+            `Archived output verification failed for provider attempt ${attempt.attemptId}.`,
+          );
+        }
+        bySource.set(matched.sourceFile, {
+          metadata: providerMetadataFromAttempt(provider, attempt, output),
+          attempt,
+          output,
+        });
+      }
+      attempts.push(attempt);
+    }
+    if (unmatchedSources.length > 0) {
+      throw new WorkflowError(
+        "INVALID_TRANSITION",
+        `Imported files are not bound to a supplied durable attempt: ${unmatchedSources
+          .map((source) => basename(source.sourceFile))
+          .join(", ")}.`,
+      );
+    }
+    return {
+      attempts,
+      bySource,
+      succeededAttempts: ledger.filter(
+        (attempt) => attempt.stage === stage && attempt.state === "succeeded",
+      ),
+    };
+  }
+
   private async validateMcpProvider(
     input: SelectProviderInput,
   ): Promise<Awaited<ReturnType<ProviderFacade["list"]>>[number] | undefined> {
@@ -1058,6 +1405,265 @@ export class WorkflowService {
     }
     return undefined;
   }
+}
+
+function workflowDerivedRightsForGeneratedStage(
+  state: TaskState,
+  stage: "script" | "storyboard",
+): RightsRecord {
+  const upstream = stage === "script" ? "concept" : "script";
+  const upstreamState = state.stages[upstream];
+  const revision = upstreamState.approvedRevision
+    ? upstreamState.revisions[upstreamState.approvedRevision - 1]
+    : undefined;
+  if (!revision?.artifactIds.length) {
+    throw new WorkflowError(
+      "RIGHTS_REQUIRED",
+      `Generated ${stage} requires an approved ${upstream} artifact rights source.`,
+    );
+  }
+  return {
+    basis: "workflow-derived",
+    sourceArtifactIds: [...revision.artifactIds],
+    declaration: `Generated ${stage} derives only from the approved ${upstream} revision and task-controlled input.`,
+  };
+}
+
+function normalizeImportRights(
+  input: ImportArtifactInput,
+  sourceFiles: readonly string[],
+  allowMissingForLegacyTests: boolean,
+): ReadonlyMap<string, RightsRecord | undefined> {
+  const defaultRights = input.rights
+    ? input.stage === "concept"
+      ? validateConceptRights(input.rights)
+      : validateRightsRecord(input.rights)
+    : undefined;
+  const perFile = input.fileRights ?? {};
+  const matchedKeys = new Set<string>();
+  const rightsBySource = new Map<string, RightsRecord | undefined>();
+
+  for (const sourceFile of sourceFiles) {
+    const candidates = Object.entries(perFile).filter(([key]) => {
+      if (key === sourceFile || key === basename(sourceFile)) return true;
+      return resolve(key) === sourceFile;
+    });
+    if (candidates.length > 1) {
+      const serialized = new Set(candidates.map(([, rights]) => stableJson(rights)));
+      if (serialized.size > 1) {
+        throw new WorkflowError(
+          "INVALID_INPUT",
+          `Conflicting fileRights entries match ${sourceFile}.`,
+        );
+      }
+    }
+    for (const [key] of candidates) matchedKeys.add(key);
+    const selected = candidates[0]?.[1] ?? defaultRights;
+    if (!selected) {
+      if (allowMissingForLegacyTests) {
+        rightsBySource.set(sourceFile, undefined);
+        continue;
+      }
+      throw new WorkflowError(
+        "RIGHTS_REQUIRED",
+        `Artifact rights metadata is required for ${basename(sourceFile)}.`,
+      );
+    }
+    rightsBySource.set(
+      sourceFile,
+      input.stage === "concept"
+        ? validateConceptRights(selected)
+        : validateRightsRecord(selected),
+    );
+  }
+  const unused = Object.keys(perFile).filter((key) => !matchedKeys.has(key));
+  if (unused.length > 0) {
+    throw new WorkflowError(
+      "INVALID_INPUT",
+      `fileRights contains entries that do not match imported files: ${unused.join(", ")}.`,
+    );
+  }
+  return rightsBySource;
+}
+
+function normalizeImportFileNames(
+  fileNames: ImportArtifactInput["fileNames"],
+  sourceFiles: readonly string[],
+): ReadonlyMap<string, string> {
+  const entries = Object.entries(fileNames ?? {});
+  const matchedKeys = new Set<string>();
+  const basenameCounts = new Map<string, number>();
+  for (const sourceFile of sourceFiles) {
+    const name = basename(sourceFile);
+    basenameCounts.set(name, (basenameCounts.get(name) ?? 0) + 1);
+  }
+
+  const normalized = new Map<string, string>();
+  const usedNames = new Map<string, string>();
+  for (const sourceFile of sourceFiles) {
+    const sourceBasename = basename(sourceFile);
+    const candidates = entries.filter(([key]) => {
+      if (key === sourceFile || resolve(key) === sourceFile) return true;
+      return key === sourceBasename && basenameCounts.get(sourceBasename) === 1;
+    });
+    if (candidates.length > 1) {
+      const names = new Set(candidates.map(([, name]) => name.trim()));
+      if (names.size > 1) {
+        throw new WorkflowError(
+          "INVALID_INPUT",
+          `Conflicting fileNames entries match ${sourceFile}.`,
+        );
+      }
+    }
+    for (const [key] of candidates) matchedKeys.add(key);
+    const requested = candidates[0]?.[1]?.trim() ?? sourceBasename;
+    if (basename(requested) !== requested || safeFileName(requested) !== requested) {
+      throw new WorkflowError(
+        "INVALID_INPUT",
+        `fileNames value for ${sourceFile} must be a safe basename, not a path: ${requested}.`,
+      );
+    }
+    const collisionKey = requested.normalize("NFKC").toLocaleLowerCase("en-US");
+    const collision = usedNames.get(collisionKey);
+    if (collision) {
+      throw new WorkflowError(
+        "INVALID_INPUT",
+        `Imported files resolve to the duplicate contract filename ${requested}; provide unique fileNames mappings for ${collision} and ${sourceFile}.`,
+      );
+    }
+    usedNames.set(collisionKey, sourceFile);
+    normalized.set(sourceFile, requested);
+  }
+
+  const unused = entries.map(([key]) => key).filter((key) => !matchedKeys.has(key));
+  if (unused.length > 0) {
+    throw new WorkflowError(
+      "INVALID_INPUT",
+      `fileNames contains entries that do not unambiguously match imported files: ${unused.join(", ")}.`,
+    );
+  }
+  return normalized;
+}
+
+const RIGHTS_SOURCE_STAGES: Readonly<
+  Record<Exclude<WorkflowStage, "concept">, readonly WorkflowStage[]>
+> = {
+  script: ["concept"],
+  storyboard: ["script"],
+  assets: ["storyboard"],
+  keyframes: ["assets"],
+  clips: ["keyframes"],
+  audio: ["script"],
+  edit: ["clips", "audio"],
+  qc: ["edit"],
+};
+
+function validateImportRightsLineage(
+  state: TaskState,
+  stage: WorkflowStage,
+  rights: RightsRecord,
+): void {
+  if (rights.basis !== "workflow-derived") return;
+  if (stage === "concept") {
+    throw new WorkflowError("RIGHTS_REQUIRED", "Concept rights cannot be workflow-derived.");
+  }
+  for (const sourceArtifactId of rights.sourceArtifactIds) {
+    assertApprovedRightsSource(state, stage, sourceArtifactId);
+  }
+}
+
+function assertApprovedRightsSource(
+  state: TaskState,
+  derivedStage: WorkflowStage,
+  sourceArtifactId: string,
+): ArtifactRecord {
+  if (derivedStage === "concept") {
+    throw new WorkflowError("RIGHTS_REQUIRED", "Concept rights cannot cite workflow artifacts.");
+  }
+  const source = state.artifacts[sourceArtifactId];
+  if (!source) {
+    throw new WorkflowError(
+      "RIGHTS_REQUIRED",
+      `Rights lineage references missing artifact ${sourceArtifactId}.`,
+    );
+  }
+  if (!RIGHTS_SOURCE_STAGES[derivedStage].includes(source.stage)) {
+    throw new WorkflowError(
+      "RIGHTS_REQUIRED",
+      `${derivedStage} rights may derive only from approved ${RIGHTS_SOURCE_STAGES[derivedStage].join(" or ")} artifacts, not ${source.stage}/${sourceArtifactId}.`,
+    );
+  }
+  const sourceStage = state.stages[source.stage];
+  const approvedRevision = sourceStage.approvedRevision
+    ? sourceStage.revisions[sourceStage.approvedRevision - 1]
+    : undefined;
+  if (!approvedRevision?.artifactIds.includes(sourceArtifactId) || source.stale) {
+    throw new WorkflowError(
+      "RIGHTS_REQUIRED",
+      `Rights lineage source ${sourceArtifactId} is not part of the current approved ${source.stage} revision.`,
+    );
+  }
+  return source;
+}
+
+type ProviderAttemptOutput = NonNullable<StoredProviderAttempt["outputs"]>[number];
+
+interface ValidatedProviderSource {
+  readonly metadata: ProviderArtifactMetadata;
+  readonly attempt: StoredProviderAttempt;
+  readonly output: ProviderAttemptOutput;
+}
+
+interface ValidatedProviderImports {
+  readonly attempts: readonly StoredProviderAttempt[];
+  readonly bySource: ReadonlyMap<string, ValidatedProviderSource>;
+  readonly succeededAttempts: readonly StoredProviderAttempt[];
+}
+
+function providerMetadataFromAttempt(
+  input: ProviderArtifactMetadata,
+  attempt: StoredProviderAttempt,
+  output: ProviderAttemptOutput,
+): ProviderArtifactMetadata {
+  invariant(input.attemptId, "Provider attempt metadata is missing during normalization.");
+  const calculatedCost = attempt.pricingSnapshot.calculatedCost;
+  const outputSeed = output.metadata?.seed ?? attempt.requestMetadata?.seed;
+  const model = attempt.observedModel ?? attempt.model;
+  return {
+    attemptId: attempt.attemptId,
+    providerId: attempt.providerId,
+    capability: attempt.capability,
+    ...(attempt.externalJobId ? { jobId: attempt.externalJobId } : {}),
+    ...(model ? { model } : {}),
+    promptHash: attempt.requestSha256,
+    ...(typeof outputSeed === "string" || typeof outputSeed === "number"
+      ? { seed: outputSeed }
+      : {}),
+    ...(calculatedCost === undefined
+      ? {}
+      : {
+          cost: {
+            amount: calculatedCost,
+            currency: attempt.pricingSnapshot.currency,
+          },
+        }),
+  };
+}
+
+function assertCanonicalTaskChild(root: string, candidate: string, label: string): void {
+  const relation = relative(root, candidate);
+  if (!relation || relation.startsWith("..") || isAbsolute(relation)) {
+    throw new WorkflowError("INVALID_TRANSITION", `${label} is outside the task workspace.`);
+  }
+}
+
+async function firstExistingProviderOutputPath(
+  ...candidates: readonly (string | undefined)[]
+): Promise<string | undefined> {
+  for (const candidate of candidates) {
+    if (candidate && (await pathExists(candidate))) return candidate;
+  }
+  return undefined;
 }
 
 function assertCanImport(state: TaskState, stage: WorkflowStage): void {
@@ -1175,15 +1781,22 @@ function assertProviderMatchesBinding(
   state: TaskState,
   capability: ProviderCapability,
   providerId: string,
+  model?: string,
 ): void {
   const binding = state.providers[capability];
   if (!binding) {
     throw new WorkflowError("PROVIDER_SELECTION_REQUIRED", `No frozen binding for ${capability}.`);
   }
-  if (binding.mode !== "manual" && binding.providerId !== providerId) {
+  if (binding.providerId !== providerId) {
     throw new WorkflowError(
       "INVALID_TRANSITION",
       `Artifact provider ${providerId} does not match frozen binding ${binding.providerId}.`,
+    );
+  }
+  if ((binding.model ?? undefined) !== (model ?? undefined)) {
+    throw new WorkflowError(
+      "INVALID_TRANSITION",
+      `Artifact model ${model ?? "<none>"} does not match frozen model ${binding.model ?? "<none>"}.`,
     );
   }
 }
@@ -1347,7 +1960,7 @@ function assertExportable(state: TaskState): void {
   }
 
   const validatedRights = new Set<string>();
-  for (const stageName of ["assets", "keyframes", "clips", "audio", "edit"] as const) {
+  for (const stageName of WORKFLOW_STAGES.filter((stageName) => stageName !== "concept")) {
     const stage = state.stages[stageName];
     const revision = stage.approvedRevision
       ? stage.revisions[stage.approvedRevision - 1]
@@ -1435,6 +2048,7 @@ function validateArtifactRightsChain(
     }
     visiting.add(artifactId);
     for (const sourceArtifactId of rights.sourceArtifactIds) {
+      assertApprovedRightsSource(state, artifact.stage, sourceArtifactId);
       validateArtifactRightsChain(state, sourceArtifactId, visiting, validated);
     }
     visiting.delete(artifactId);
@@ -1681,5 +2295,34 @@ function assertMcpBindingEvidence(input: SelectProviderInput): void {
   }
   if (Number.isNaN(Date.parse(checkedAt))) {
     throw new WorkflowError("INVALID_INPUT", "MCP binding metadata.checkedAt must be an ISO timestamp.");
+  }
+}
+
+function validateAdvertisedProviderModel(
+  descriptor: { id: string; metadata?: Readonly<Record<string, unknown>> },
+  input: SelectProviderInput,
+): void {
+  const advertised = descriptor.metadata?.models;
+  if (!Array.isArray(advertised)) return;
+  const modelIds = advertised.flatMap((value) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return [];
+    const record = value as Record<string, unknown>;
+    if (typeof record.id !== "string") return [];
+    const capabilities = record.capabilities;
+    if (Array.isArray(capabilities) && !capabilities.includes(input.capability)) return [];
+    return [record.id];
+  });
+  if (modelIds.length === 0) return;
+  if (!input.model?.trim()) {
+    throw new WorkflowError(
+      "INVALID_INPUT",
+      `${descriptor.id}/${input.capability} advertises concrete models; freeze one of ${modelIds.join(", ")}.`,
+    );
+  }
+  if (!modelIds.includes(input.model.trim())) {
+    throw new WorkflowError(
+      "INVALID_INPUT",
+      `${input.model} is not an advertised ${input.capability} model for ${descriptor.id}.`,
+    );
   }
 }

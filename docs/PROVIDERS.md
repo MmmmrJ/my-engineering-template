@@ -49,7 +49,7 @@ Use the most durable available mode:
 
 The order is about recovery and auditability, not creative quality. All modes enter the same artifact contract and the task's strict or quick review policy.
 
-Platform manual providers are not browser automation and do not claim unofficial APIs. `providers submit` writes a tailored package under `output/<task-id>/manual/<provider-id>/requests/`; the user operates the platform and downloads durable files. `providers complete-manual` safely verifies and archives those files and writes the matching result package; then resume/poll/import through the normal job and artifact surfaces. Share pages, login-only URLs, and expiring links are not deliverables.
+Platform manual providers are not browser automation and do not claim unofficial APIs. `providers submit` writes a tailored package under `output/<task-id>/manual/<provider-id>/requests/`; the user operates the platform and downloads durable files. `providers complete-manual` safely verifies and archives those files and writes the matching result package; then use `providers import-output` with that attempt ID to enter the artifact/review surface. Share pages, login-only URLs, and expiring links are not deliverables.
 
 Example completion input:
 
@@ -64,6 +64,25 @@ Example completion input:
 
 Omit `expectedSha256` when the external platform does not provide one; the workflow still calculates and persists its own SHA-256 after validating size, signature, and file kind.
 
+Import a successful attempt only through its durable ledger record:
+
+```powershell
+npm run cartoon -- providers import-output <task-id> --attempt <attempt-id> [--attempt <attempt-id> ...] --contract @stage-contract.json --metadata @metadata.json
+```
+
+The command derives provider, capability, observed model, job identity, prompt hash, seed, and safe provider receipt metadata from `provider-jobs.jsonl`. It requires every named attempt to target the current stage revision, imports each complete output set atomically, and rechecks task-local paths, sizes, and hashes. The metadata file supplies stage rights and any per-file `fileRights`; it must not override `provider`. Repeat `--attempt` after several terminal attempts when one request cannot produce a complete stage bundle. Only one attempt may be nonterminal at a time; finish, fail, or cancel it before submitting another.
+
+Provider archives can reuse generic basenames across attempts. In that case, add a unique logical filename map to metadata and use those values in the stage contract:
+
+```json
+{
+  "fileNames": {
+    "/absolute/task/provider-downloads/attempt-a/output-001.png": "hero-reference.png",
+    "/absolute/task/provider-downloads/attempt-b/output-001.png": "location-reference.png"
+  }
+}
+```
+
 ## Select and freeze
 
 After storyboard approval, verify required capabilities and freeze a selection:
@@ -76,7 +95,7 @@ For a mixed explicit map, bind deterministic rendering locally with `--binding r
 
 Platform handoffs are capability-specific, so freeze them with a complete mixed map rather than `--provider <platform>` for all routes. For example, use `--binding image.generate=jimeng-manual:manual`, `--binding video.i2v=kling-manual:manual`, generic/manual audio bindings, and either `render.timeline=jianying-manual:manual` or `render.timeline=local-ffmpeg:api`. Keep `quality.inspect=local-ffmpeg:api` when 剪映 performs the edit so the returned MP4 is independently checked.
 
-Do this before G4 (`assets`). The task must retain the selected provider/profile and concrete models. V1 rejects replacement of a frozen binding. On outage or quota exhaustion, stop and show the user retry, wait, use the already-selected manual path, or create a replacement task; never switch a paid provider silently.
+Do this before G4 (`assets`). Selection may be accumulated only until all six required capabilities are present; the runtime then records one explicit profile-freeze event and rejects every later addition or replacement. Include optional bindings such as `quality.inspect` before adding the last required capability. The task retains the selected provider/profile, advertised provider metadata, and concrete models. On outage or quota exhaustion, stop and show the user retry, wait, use the already-selected manual path, or create a replacement task; never switch a paid provider silently.
 
 The freeze is not payment approval. Before each new potentially chargeable submission, show the provider/model/capability, current estimate (or `unknown`), currency, and data-transfer mode, then record the user's explicit confirmation. Polling, downloading, or resuming that same durable job does not need another confirmation; creating a replacement paid job does.
 

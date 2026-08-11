@@ -345,6 +345,7 @@ export class ProviderExecutionManager {
           mimeType: downloaded.mimeType,
           sizeBytes: downloaded.sizeBytes,
           sha256: downloaded.sha256,
+          ...(output.metadata ? { metadata: output.metadata } : {}),
         });
       }
     } catch (error) {
@@ -563,6 +564,7 @@ function persistableOutputProjection(output: ProviderOutput): ProviderOutput {
     ...(output.mimeType ? { mimeType: output.mimeType } : {}),
     ...(output.sizeBytes === undefined ? {} : { sizeBytes: output.sizeBytes }),
     ...(output.sha256 ? { sha256: output.sha256 } : {}),
+    ...(output.metadata ? { metadata: output.metadata } : {}),
   };
 }
 

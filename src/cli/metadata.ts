@@ -17,6 +17,8 @@ import { assertNoResolvedCredentials, sha256Text } from "../workflow/util.js";
 export interface ImportMetadata {
   stageContract?: StageContract;
   rights?: RightsRecord;
+  fileRights?: Readonly<Record<string, RightsRecord>>;
+  fileNames?: Readonly<Record<string, string>>;
   provider?: ProviderArtifactMetadata;
   aiLabel?: AiLabelRecord;
   voiceCloneConsent?: VoiceCloneConsentRecord;
@@ -51,6 +53,10 @@ export async function readImportMetadata(
       ? { stageContract: parseStageContract(record.stageContract) }
       : {}),
     ...(record.rights !== undefined ? { rights: parseRights(record.rights) } : {}),
+    ...(record.fileRights !== undefined
+      ? { fileRights: parseFileRights(record.fileRights) }
+      : {}),
+    ...(record.fileNames !== undefined ? { fileNames: parseFileNames(record.fileNames) } : {}),
     ...(record.provider ? { provider: parseProvider(record.provider) } : {}),
     ...(record.aiLabel ? { aiLabel: parseAiLabel(record.aiLabel) } : {}),
     ...(record.voiceCloneConsent
@@ -72,6 +78,8 @@ export function importMetadataToInput(
 ): Partial<Pick<
   ImportArtifactInput,
   | "rights"
+  | "fileRights"
+  | "fileNames"
   | "stageContract"
   | "provider"
   | "aiLabel"
@@ -204,6 +212,33 @@ function parseRights(value: unknown): RightsRecord {
   );
 }
 
+function parseFileRights(value: unknown): Readonly<Record<string, RightsRecord>> {
+  const record = asRecord(value, "fileRights");
+  const parsed: Record<string, RightsRecord> = {};
+  for (const [file, rights] of Object.entries(record)) {
+    if (!file.trim()) {
+      throw new WorkflowError("INVALID_INPUT", "fileRights keys must be non-empty file paths or basenames.");
+    }
+    parsed[file] = parseRights(rights);
+  }
+  return parsed;
+}
+
+function parseFileNames(value: unknown): Readonly<Record<string, string>> {
+  const record = asRecord(value, "fileNames");
+  const parsed: Record<string, string> = {};
+  for (const [file, logicalName] of Object.entries(record)) {
+    if (!file.trim() || typeof logicalName !== "string" || !logicalName.trim()) {
+      throw new WorkflowError(
+        "INVALID_INPUT",
+        "fileNames must map non-empty source paths or basenames to non-empty filenames.",
+      );
+    }
+    parsed[file] = logicalName.trim();
+  }
+  return parsed;
+}
+
 function parseProvider(value: unknown): ProviderArtifactMetadata {
   const record = asRecord(value, "provider");
   const capability = stringField(record, "capability", "provider");
@@ -220,6 +255,7 @@ function parseProvider(value: unknown): ProviderArtifactMetadata {
   return {
     providerId: stringField(record, "providerId", "provider"),
     capability,
+    ...(typeof record.attemptId === "string" ? { attemptId: record.attemptId } : {}),
     ...(typeof record.jobId === "string" ? { jobId: record.jobId } : {}),
     ...(typeof record.model === "string" ? { model: record.model } : {}),
     ...(promptHash ? { promptHash } : {}),

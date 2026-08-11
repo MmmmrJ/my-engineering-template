@@ -40,7 +40,7 @@ Task files are the recovery boundary. `events.jsonl` is the durable transition h
 
 Provider configuration stores environment-variable names, endpoints, models, routes, and capability metadata. It must not store credential values. Direct API jobs are preferred because they can retain request IDs, polling state, retries, and structured errors. MCP and manual results enter through the same import/provenance boundary.
 
-Provider selection is frozen in `provider-bindings.json` after storyboard approval and before `assets`. The freeze prevents silent model drift and cross-stage inconsistency. V1 rejects later rebinding; an unrecoverable route requires a replacement task.
+Provider selection is finalized after storyboard approval and before `assets`. The append-only `provider.profile_frozen` event, state projection, and explicit `frozen` marker in `provider-bindings.json` make completion distinguishable from a partial map. The freeze prevents silent model drift and cross-stage inconsistency. V1 rejects later additions or rebinding; an unrecoverable route requires a replacement task.
 
 The provider execution manager scopes the global `local-ffmpeg` descriptor to the selected task before execution. Requests use strict versioned JSON and task-relative paths; raw executable arguments are never accepted. Output files are created immutably and recorded in `provider-jobs.jsonl` with hashes and executor receipts.
 

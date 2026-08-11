@@ -209,6 +209,18 @@ function applyEvent(
       }
       return;
     }
+    case "provider.profile_frozen": {
+      invariant(!state.providerProfileFreeze, "Provider profile can only be frozen once.");
+      invariant(
+        missingProviders(state).length === 0,
+        "Provider profile cannot be frozen before required capabilities are complete.",
+      );
+      state.providerProfileFreeze = {
+        frozenAt: event.at,
+        frozenByEventId: event.eventId,
+      };
+      return;
+    }
     case "stage.invalidated": {
       const stage = state.stages[event.stage];
       invariant(stage.revisions.length > 0, `Cannot invalidate empty stage ${event.stage}.`);

@@ -9,7 +9,11 @@ Common rules:
 - File fields are basenames and must be present in the same imported revision.
 - Primary entries use distinct role-correct files: assets/keyframes are PNG/JPEG/WebP, clips are MP4/WebM/MOV, audio is MP3/WAV/OGG/FLAC/M4A, subtitles are SRT/ASS/text, and reports/timelines use their declared document formats. Aggregates cannot reuse a primary media file.
 - Approved upstream contracts are the source of truth for duration, shot, character, and asset coverage.
+- Script scenes are contiguous; asset IDs/types/names exactly preserve the storyboard inventory; keyframe asset IDs exactly preserve each shot mapping; audio voice maps exactly cover speaking characters and cues stay within script duration.
 - An automatic review, continuity check, technical check, or QC category with an unresolved failure blocks the revision.
+- Every imported file carries a validated rights record. Use metadata `rights` when all files share one basis, or `fileRights` keyed by basename/path for mixed rights. Workflow-derived records must reference existing upstream artifact IDs.
+- If two source files share a basename, metadata `fileNames` must map each source path to a unique safe basename; contract file fields use those logical names.
+- Workflow-derived rights may cite only non-stale artifacts in the current approved direct-upstream revision: concept→script→storyboard→assets→keyframes→clips, script→audio, clips/audio→edit, and edit→qc.
 
 ## G1-G3
 
@@ -25,8 +29,8 @@ Use `cartoon generate <task-id>` for a valid baseline. The generator emits:
 | --- | --- |
 | `assets` | style specification, complete storyboard asset inventory, per-asset file/prompt/negative prompt/rights note, contact sheets |
 | `keyframes` | exactly one passing frame entry per approved shot, asset IDs, prompts, contact sheet, consistency report |
-| `clips` | exactly one clip or documented exception per shot, storyboard-aligned duration, proxy assembly, technical report |
-| `audio` | dialogue voice map, catalog-voice flag, music/SFX cues, mix preview, subtitle content, pronunciation and rights checks |
+| `clips` | exactly one clip file or documented no-file exception per shot, storyboard-aligned duration, proxy assembly, technical report; a no-file exception cannot claim technical pass |
+| `audio` | exact speaking-character voice map, optional narration voice when narration exists, zero or more music/SFX cues, mix preview, subtitle content, pronunciation and rights checks |
 | `edit` | MP4/SRT/ASS, deterministic timeline, sync report, fixed 1080x1920/30fps/H.264/yuv420p/AAC/48k profile and burn-in assertion |
 | `qc` | bound QC report, all eight required categories passing, waivers, zero blocking issues, AI-label confirmation |
 

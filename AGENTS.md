@@ -43,6 +43,7 @@ npm run cartoon -- providers resume-job <task-id> --attempt <attempt-id> --reque
 npm run cartoon -- providers poll <task-id> --attempt <attempt-id> [--json]
 npm run cartoon -- providers cancel <task-id> --attempt <attempt-id> [--json]
 npm run cartoon -- providers jobs <task-id> [--json]
+npm run cartoon -- providers import-output <task-id> --attempt <attempt-id> [--attempt <attempt-id> ...] --contract @stage-contract.json --metadata @metadata.json [--json]
 npm run cartoon -- import <task-id> --stage <id> --file <path> --contract @stage-contract.json --metadata @metadata.json
 npm run cartoon -- export <task-id>
 npm run cartoon -- doctor [--json]

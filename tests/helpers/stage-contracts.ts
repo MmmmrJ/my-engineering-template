@@ -91,20 +91,34 @@ export async function makeStageContract(
     const script = approved(state, "script");
     if (script.stage !== "script") throw new Error("script contract mismatch");
     const audio = files.filter(isAudio);
-    const voiceFiles = audio.slice(0, script.characters.length);
-    const remaining = audio.slice(script.characters.length);
-    if (voiceFiles.length !== script.characters.length || remaining.length < 3) {
+    const speakingCharacterIds = [
+      ...new Set(script.scenes.flatMap((scene) => scene.dialogue.map((line) => line.characterId))),
+    ];
+    const hasNarration = script.scenes.some((scene) => Boolean(scene.narration?.trim()));
+    const voiceFileCount = speakingCharacterIds.length + (hasNarration ? 1 : 0);
+    const voiceFiles = audio.slice(0, voiceFileCount);
+    const remaining = audio.slice(voiceFileCount);
+    if (voiceFiles.length !== voiceFileCount || remaining.length < 3) {
       throw new Error("audio fixture needs per-character voices, music, SFX, and a mix preview");
     }
     return {
       schemaVersion: 1,
       stage,
-      dialogueVoiceMap: script.characters.map((character, index) => ({
-        characterId: character.id,
-        voiceId: `VOICE_${character.id}`,
+      dialogueVoiceMap: speakingCharacterIds.map((characterId, index) => ({
+        characterId,
+        voiceId: `VOICE_${characterId}`,
         file: required(voiceFiles[index]),
         catalogVoice: true,
       })),
+      ...(hasNarration
+        ? {
+            narrationVoice: {
+              voiceId: "VOICE_NARRATOR",
+              file: required(voiceFiles[speakingCharacterIds.length]),
+              catalogVoice: true,
+            },
+          }
+        : {}),
       musicCues: [{ id: "MUSIC_01", file: required(remaining[0]), startMs: 0 }],
       sfxCues: [{ id: "SFX_01", file: required(remaining[1]), startMs: 0 }],
       mixPreviewFile: required(remaining[2]),

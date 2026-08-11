@@ -27,7 +27,7 @@ import {
   WORKFLOW_STAGES,
 } from "../contracts/stages.js";
 import { WorkflowError, invariant } from "./errors.js";
-import { reduceEvents } from "./reducer.js";
+import { missingProviders, reduceEvents } from "./reducer.js";
 import { stableJson, stableJsonLine, versionLabel } from "./util.js";
 
 export const TASK_FILES = {
@@ -277,7 +277,14 @@ export class FileEventStore {
     });
     await this.writeAtomic(
       join(this.taskDirectory, TASK_FILES.providerBindings),
-      stableJson({ schemaVersion: 1, bindings }),
+      stableJson({
+        schemaVersion: 1,
+        frozen: Boolean(state.providerProfileFreeze) || missingProviders(state).length === 0,
+        ...(state.providerProfileFreeze
+          ? { profileFreeze: state.providerProfileFreeze }
+          : {}),
+        bindings,
+      }),
     );
 
     await this.appendMissingArtifacts(

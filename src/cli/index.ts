@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -26,6 +27,7 @@ import {
   loadProviderRegistry,
   type ProviderEstimate,
   type ProviderRegistry,
+  type StoredProviderAttempt,
 } from "../providers/index.js";
 import {
   DefaultDoctorRunner,
@@ -295,6 +297,8 @@ export async function runCli(
             sourceFiles: files.map((path) => resolve(cwd, path)),
             stageContract,
             ...(rights ? { rights } : {}),
+            ...(metadata.fileRights ? { fileRights: metadata.fileRights } : {}),
+            ...(metadata.fileNames ? { fileNames: metadata.fileNames } : {}),
             ...(metadata.provider ? { provider: metadata.provider } : {}),
             ...(metadata.aiLabel ? { aiLabel: metadata.aiLabel } : {}),
             ...(metadata.voiceCloneConsent
@@ -399,7 +403,7 @@ async function runProviders(
   if (!subcommand) {
     throw new WorkflowError(
       "USAGE",
-      "providers requires list, check, select, estimate, submit, complete-manual, resume-job, poll, cancel, or jobs.",
+      "providers requires list, check, select, estimate, submit, complete-manual, import-output, resume-job, poll, cancel, or jobs.",
     );
   }
   const args = parseArguments(argv.slice(1));
@@ -454,7 +458,9 @@ async function runProviders(
     writeResult(
       flag(args, "json"),
       state.providers,
-      `Frozen ${bindings.length} provider binding(s) for ${state.taskId}.`,
+      state.providerProfileFreeze
+        ? `Frozen the complete provider profile for ${state.taskId} with ${bindings.length} new binding(s).`
+        : `Recorded ${bindings.length} provider binding(s) for ${state.taskId}; the profile remains open until all required capabilities are selected.`,
       stdout,
     );
     return 0;
@@ -557,6 +563,7 @@ async function runProviders(
     const eligibleRequest = await requireProviderResumeEligibility(
       workflowService,
       task,
+      attemptId,
       attempt.providerId,
       attempt.stage,
       request,
@@ -597,6 +604,121 @@ async function runProviders(
       flag(args, "json"),
       job,
       `Completed manual provider attempt ${attemptId}: ${job.state}. Run cartoon resume to import the archived output.`,
+      stdout,
+    );
+    return 0;
+  }
+  if (subcommand === "import-output") {
+    assertAllowedOptions(args, ["attempt", "contract", "metadata", "summary", "json"]);
+    assertPositionalCount(args, 1);
+    const task = positional(args, 0, "task-id") as string;
+    const attemptIds = options(args, "attempt");
+    if (attemptIds.length === 0) {
+      throw new WorkflowError("USAGE", "providers import-output requires at least one --attempt.");
+    }
+    if (new Set(attemptIds).size !== attemptIds.length) {
+      throw new WorkflowError("USAGE", "providers import-output received a duplicate --attempt.");
+    }
+    const metadata = await readImportMetadata(option(args, "metadata"), cwd);
+    if (metadata.provider) {
+      throw new WorkflowError(
+        "INVALID_INPUT",
+        "providers import-output derives provider metadata from the durable ledger; metadata.provider is not allowed.",
+      );
+    }
+    const stageContract = option(args, "contract")
+      ? await readJsonFile(
+          option(args, "contract"),
+          cwd,
+          stageContractSchema,
+          "stage contract",
+        )
+      : metadata.stageContract;
+    if (!stageContract) {
+      throw new WorkflowError(
+        "STAGE_CONTRACT_INVALID",
+        "A structured stage contract is required via --contract or metadata.stageContract.",
+      );
+    }
+    const workflowService = await getWorkflow();
+    await workflowService.getState(task);
+    const manager = new ProviderExecutionManager(
+      await getProviderRegistry(),
+      workflowService.resolveTaskDirectory(task),
+    );
+    const ledger = await manager.listAttempts();
+    const attempts = attemptIds.map((attemptId) =>
+      ledger.find((candidate) => candidate.attemptId === attemptId),
+    );
+    if (
+      attempts.some(
+        (attempt) =>
+          !attempt ||
+          attempt.state !== "succeeded" ||
+          !attempt.stage ||
+          !isWorkflowStage(attempt.stage),
+      )
+    ) {
+      throw new WorkflowError(
+        "INVALID_TRANSITION",
+        "Every provider attempt must be a successful importable workflow attempt.",
+      );
+    }
+    const importableAttempts = attempts as StoredProviderAttempt[];
+    const stage = importableAttempts[0]?.stage;
+    if (!stage || !isWorkflowStage(stage) || importableAttempts.some((attempt) => attempt.stage !== stage)) {
+      throw new WorkflowError(
+        "INVALID_TRANSITION",
+        "All provider attempts in one atomic import must target the same workflow stage.",
+      );
+    }
+    const files = await Promise.all(
+      importableAttempts.flatMap((attempt) =>
+        (attempt.outputs ?? []).map((output) =>
+          firstExistingPath(output.localPath, output.archivedPath),
+        ),
+      ),
+    );
+    if (files.length === 0 || files.some((path) => !path)) {
+      throw new WorkflowError(
+        "INVALID_TRANSITION",
+        "One or more provider attempts have no complete archived output set.",
+      );
+    }
+    const result = await workflowService.importArtifact(task, {
+      stage,
+      sourceFiles: files as string[],
+      stageContract,
+      ...(metadata.rights ? { rights: metadata.rights } : {}),
+      ...(metadata.fileRights ? { fileRights: metadata.fileRights } : {}),
+      ...(metadata.fileNames ? { fileNames: metadata.fileNames } : {}),
+      providerAttempts: importableAttempts.map((attempt) => {
+        const model = attempt.observedModel ?? attempt.model;
+        return {
+          providerId: attempt.providerId,
+          capability: attempt.capability,
+          attemptId: attempt.attemptId,
+          ...(attempt.externalJobId ? { jobId: attempt.externalJobId } : {}),
+          ...(model ? { model } : {}),
+        };
+      }),
+      ...(metadata.aiLabel ? { aiLabel: metadata.aiLabel } : {}),
+      ...(metadata.voiceCloneConsent
+        ? { voiceCloneConsent: metadata.voiceCloneConsent }
+        : {}),
+      ...(metadata.targetIds ? { targetIds: metadata.targetIds } : {}),
+      ...(metadata.dependsOnIds ? { dependsOnIds: metadata.dependsOnIds } : {}),
+      ...(metadata.fileScopes ? { fileScopes: metadata.fileScopes } : {}),
+      ...(option(args, "summary") ?? metadata.summary
+        ? { summary: option(args, "summary") ?? metadata.summary }
+        : {}),
+      ...(metadata.mediaType ? { mediaType: metadata.mediaType } : {}),
+      ...(metadata.metadata ? { metadata: metadata.metadata } : {}),
+    });
+    writeResult(
+      flag(args, "json"),
+      result,
+      `Imported ${attemptIds.length} provider attempt(s) as ${stage}/${versionLabel(result.revision)}; review required.`,
       stdout,
     );
     return 0;
@@ -650,6 +772,21 @@ async function runProviders(
     return 0;
   }
   throw new WorkflowError("USAGE", `Unknown providers command: ${subcommand}`);
+}
+
+async function firstExistingPath(
+  ...candidates: readonly (string | undefined)[]
+): Promise<string | undefined> {
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // Try the durable archived path when a provider-local copy is unavailable.
+    }
+  }
+  return undefined;
 }
 
 function selectionInputs(
@@ -829,8 +966,10 @@ function formatResume(result: Awaited<ReturnType<WorkflowService["resume"]>>): s
       return `Resume provider attempt ${result.action.attemptId} for ${result.action.stage}.`;
     case "poll-provider-job":
       return `Poll provider attempt ${result.action.attemptId} for ${result.action.stage}.`;
+    case "cancel-provider-job":
+      return `Cancel obsolete provider attempt ${result.action.attemptId} before continuing ${result.action.stage}.`;
     case "import-provider-output":
-      return `Import ${result.action.files.length} archived provider output(s) from ${result.action.attemptId} into ${result.action.stage}.`;
+      return `Import ${result.action.files.length} archived provider output(s) from ${(result.action.attemptIds ?? [result.action.attemptId]).join(", ")} into ${result.action.stage}.`;
     case "export":
       return "All stages are approved; export is available.";
     case "stopped":
@@ -868,6 +1007,7 @@ Usage:
   cartoon providers estimate <task-id> --provider <id> --request @request.json [--json]
   cartoon providers submit <task-id> --provider <id> --stage <stage> --request @request.json --confirmation @confirmation.json [--json]
   cartoon providers complete-manual <task-id> --attempt <attempt-id> --result @result.json [--json]
+  cartoon providers import-output <task-id> --attempt <attempt-id> [--attempt <attempt-id> ...] --contract @stage-contract.json --metadata @metadata.json [--json]
   cartoon providers resume-job <task-id> --attempt <attempt-id> --request @request.json [--json]
   cartoon providers poll|cancel <task-id> --attempt <attempt-id> [--json]
   cartoon providers jobs <task-id> [--json]

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 
@@ -222,8 +222,9 @@ describe("LocalFfmpegProviderAdapter", () => {
 
 async function taskDirectory(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "local-ffmpeg-provider-"));
-  temporaryDirectories.push(root);
-  return root;
+  const canonical = await realpath(root);
+  temporaryDirectories.push(canonical);
+  return canonical;
 }
 
 function localAdapter(

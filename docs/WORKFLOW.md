@@ -60,7 +60,7 @@ npm run cartoon -- review <task-id> --stage <stage-id> --decision regenerate --f
 npm run cartoon -- review <task-id> --stage <stage-id> --decision abort --feedback "<reason>"
 ```
 
-Record all feedback and apply it to the named targets. Do not infer a decision from silence. Run `resume` after recording a decision that permits more work. If it returns `resume-provider-job`, `poll-provider-job`, or `import-provider-output`, complete that durable attempt before submitting another request.
+Record all feedback and apply it to the named targets. Do not infer a decision from silence. Run `resume` after recording a decision that permits more work. If it returns `resume-provider-job`, `poll-provider-job`, `cancel-provider-job`, or `import-provider-output`, complete that durable action before submitting another request. Provider attempts are bound to the next stage revision; obsolete nonterminal attempts must be cancelled, never imported into a later revision.
 
 For a browser/desktop platform handoff, complete the queued attempt without editing task ledgers:
 
@@ -84,13 +84,13 @@ Do not fail over after selection. V1 does not mutate a frozen binding; preserve 
 
 ## 5. Import external results
 
-API-created work should retain job IDs automatically. MCP or manually generated results must be imported:
+For a successful API, MCP, or manual provider attempt, import the entire verified output set through its ledger identity:
 
 ```powershell
-npm run cartoon -- import <task-id> --stage <stage-id> --file <path> --contract @stage-contract.json --metadata @metadata.json
+npm run cartoon -- providers import-output <task-id> --attempt <attempt-id> [--attempt <attempt-id> ...] --contract @stage-contract.json --metadata @metadata.json
 ```
 
-The strict stage contract records required IDs, timing, upstream coverage, file references, automatic checks, and blocking issues. Metadata should identify provider/tool, model, request/resource ID, prompt/settings, source, checksum when available, and rights/terms basis. Import does not approve an artifact.
+Use ordinary `cartoon import` only for files that do not claim a durable provider job. Repeat `--attempt` to combine complete successful output sets for the same stage revision in one atomic import. When archive basenames collide, metadata `fileNames` assigns unique contract basenames by source path. The strict stage contract records required IDs, timing, upstream coverage, file references, automatic checks, and blocking issues. Metadata must provide rights for every file, either through one `rights` record or `fileRights`; provider/model/job identity is derived from the ledger for provider outputs. Import does not approve an artifact.
 
 ## 6. Export
 

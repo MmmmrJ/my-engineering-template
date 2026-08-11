@@ -20,6 +20,7 @@ import {
   type ProviderJob,
 } from "../../src/providers/index.js";
 import { WorkflowService } from "../../src/workflow/index.js";
+import { makeStageContract } from "../helpers/stage-contracts.js";
 
 describe("provider execution CLI", () => {
   let root: string;
@@ -48,7 +49,7 @@ describe("provider execution CLI", () => {
       clock: () => new Date("2026-08-10T01:02:03.000Z"),
       idGenerator: (prefix) => `${prefix}_${++sequence}`,
     });
-    taskId = await prepareMediaTask(workflow, root);
+    taskId = await prepareMediaTask(workflow);
   });
 
   const dependencies = (): CliDependencies => ({
@@ -181,7 +182,7 @@ describe("provider execution CLI", () => {
       clock: () => new Date("2026-08-10T01:02:03.000Z"),
       idGenerator: (prefix) => `${prefix}_${++sequence}`,
     });
-    taskId = await prepareMediaTask(workflow, root, "fake", "api", "frozen-model");
+    taskId = await prepareMediaTask(workflow, "fake", "api", "frozen-model");
     const requestPath = await writeRequest(root);
     const frozenConfirmationPath = await writeConfirmation(root, {
       estimatedCost: 0.2,
@@ -399,11 +400,12 @@ describe("provider execution CLI", () => {
   it("creates a zero-cost manual request package and leaves the stage waiting for import", async () => {
     const requestDirectory = join(root, "manual", "requests");
     const resultDirectory = join(root, "manual", "results");
+    let manualSequence = 0;
     registry = new ProviderRegistry([
       new ManualProviderAdapter({
         requestDirectory,
         resultDirectory,
-        ids: { next: () => "manual-job-1" },
+        ids: { next: () => `manual-job-${++manualSequence}` },
         clock: { now: () => new Date("2026-08-10T01:02:03.000Z") },
       }),
     ]);
@@ -415,7 +417,7 @@ describe("provider execution CLI", () => {
       clock: () => new Date("2026-08-10T01:02:03.000Z"),
       idGenerator: (prefix) => `${prefix}_${++sequence}`,
     });
-    taskId = await prepareMediaTask(workflow, root, "manual", "manual");
+    taskId = await prepareMediaTask(workflow, "manual", "manual");
     const requestPath = await writeRequest(root);
     const confirmationPath = await writeConfirmation(root, {
       pricingStatus: "unknown",
@@ -472,18 +474,26 @@ describe("provider execution CLI", () => {
     expect(JSON.parse(stdout)).toMatchObject({ state: "queued" });
     expect((await workflow.getState(taskId)).stages.assets.status).toBe("pending");
 
-    const exportedImage = join(root, "manual-export.png");
-    const completionPath = join(root, "manual-completion.json");
-    await writeFile(
-      exportedImage,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-        "base64",
-      ),
+    const state = await workflow.getState(taskId);
+    const storyboard = state.stages.storyboard.revisions[0]?.stageContract;
+    if (storyboard?.stage !== "storyboard") throw new Error("structured storyboard missing");
+    const exportedImages = Array.from(
+      { length: storyboard.assetDefinitions.length + 1 },
+      (_, index) => join(root, `manual-export-${index + 1}.png`),
     );
+    const completionPath = join(root, "manual-completion-1.json");
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    );
+    await Promise.all(exportedImages.map((path) => writeFile(path, png)));
+    const firstOutputs = exportedImages.slice(0, 2);
+    const secondOutputs = exportedImages.slice(2);
     await writeFile(
       completionPath,
-      JSON.stringify({ outputs: [{ kind: "image", sourcePath: exportedImage }] }),
+      JSON.stringify({
+        outputs: firstOutputs.map((sourcePath) => ({ kind: "image", sourcePath })),
+      }),
       "utf8",
     );
     stdout = "";
@@ -502,12 +512,141 @@ describe("provider execution CLI", () => {
         dependencies(),
       ),
     ).toBe(0);
-    expect(JSON.parse(stdout)).toMatchObject({
-      state: "succeeded",
-      outputs: [{ kind: "image", mimeType: "image/png" }],
-    });
+    const completedFirst = JSON.parse(stdout) as {
+      state: string;
+      outputs: Array<{ kind: string; mimeType: string; localPath: string }>;
+    };
+    expect(completedFirst.state).toBe("succeeded");
+    expect(completedFirst.outputs).toHaveLength(firstOutputs.length);
+    expect(
+      completedFirst.outputs.every(
+        (output) => output.kind === "image" && output.mimeType === "image/png",
+      ),
+    ).toBe(true);
+
+    stdout = "";
+    expect(
+      await runCli(
+        [
+          "providers",
+          "submit",
+          taskId,
+          "--provider",
+          "manual",
+          "--stage",
+          "assets",
+          "--request",
+          requestPath,
+          "--confirmation",
+          confirmationPath,
+          "--json",
+        ],
+        dependencies(),
+      ),
+    ).toBe(0);
+    const submittedSecond = JSON.parse(stdout) as { attempt: { attemptId: string } };
+    const secondCompletionPath = join(root, "manual-completion-2.json");
+    await writeFile(
+      secondCompletionPath,
+      JSON.stringify({
+        outputs: secondOutputs.map((sourcePath) => ({ kind: "image", sourcePath })),
+      }),
+      "utf8",
+    );
+    stdout = "";
+    expect(
+      await runCli(
+        [
+          "providers",
+          "complete-manual",
+          taskId,
+          "--attempt",
+          submittedSecond.attempt.attemptId,
+          "--result",
+          secondCompletionPath,
+          "--json",
+        ],
+        dependencies(),
+      ),
+    ).toBe(0);
+    const completedSecond = JSON.parse(stdout) as {
+      state: string;
+      outputs: Array<{ kind: string; mimeType: string; localPath: string }>;
+    };
+    const completedOutputs = [...completedFirst.outputs, ...completedSecond.outputs];
+    const logicalFileNames = completedOutputs.map((_, index) =>
+      index < storyboard.assetDefinitions.length
+        ? `asset-${index + 1}.png`
+        : "contact-sheet.png",
+    );
     await expect(workflow.resume(taskId)).resolves.toMatchObject({
-      action: { type: "import-provider-output", attemptId: submitted.attempt.attemptId },
+      action: {
+        type: "import-provider-output",
+        attemptIds: [submitted.attempt.attemptId, submittedSecond.attempt.attemptId],
+      },
+    });
+
+    const contractPath = join(root, "assets-contract.json");
+    const metadataPath = join(root, "assets-metadata.json");
+    const contract = await makeStageContract(
+      await workflow.getState(taskId),
+      "assets",
+      logicalFileNames,
+    );
+    await Promise.all([
+      writeFile(contractPath, JSON.stringify(contract), "utf8"),
+      writeFile(
+        metadataPath,
+        JSON.stringify({
+          rights: {
+            basis: "provider-terms",
+            providerId: "manual",
+            termsUrl: "https://provider.example.test/terms/commercial",
+            termsReviewedAt: "2026-08-09T00:00:00.000Z",
+            commercialUseConfirmed: true,
+            thirdPartyInputsCleared: true,
+          },
+          fileNames: Object.fromEntries(
+            completedOutputs.map((output, index) => [output.localPath, logicalFileNames[index]]),
+          ),
+        }),
+        "utf8",
+      ),
+    ]);
+    stdout = "";
+    expect(
+      await runCli(
+        [
+          "providers",
+          "import-output",
+          taskId,
+          "--attempt",
+          submitted.attempt.attemptId,
+          "--attempt",
+          submittedSecond.attempt.attemptId,
+          "--contract",
+          contractPath,
+          "--metadata",
+          metadataPath,
+          "--json",
+        ],
+        dependencies(),
+      ),
+    ).toBe(0);
+    const imported = JSON.parse(stdout) as {
+      artifacts: Array<{ stage: string; providerAttemptId?: string }>;
+    };
+    expect(imported.artifacts).toHaveLength(exportedImages.length);
+    expect(
+      imported.artifacts.every(
+        (artifact) => artifact.stage === "assets" && Boolean(artifact.providerAttemptId),
+      ),
+    ).toBe(true);
+    expect(new Set(imported.artifacts.map((artifact) => artifact.providerAttemptId))).toEqual(
+      new Set([submitted.attempt.attemptId, submittedSecond.attempt.attemptId]),
+    );
+    await expect(workflow.resume(taskId)).resolves.toMatchObject({
+      action: { type: "review", stage: "assets" },
     });
   });
 
@@ -607,18 +746,13 @@ describe("provider execution CLI", () => {
 
 async function prepareMediaTask(
   workflow: WorkflowService,
-  root: string,
   providerId = "fake",
   mode: "api" | "manual" = "api",
   model?: string,
 ): Promise<string> {
   const created = await workflow.createTask({ ip: "Original Lantern Town", theme: "Courage" });
-  const source = join(root, "stage.md");
-  await writeFile(source, "# approved stage\n", "utf8");
   for (const stage of ["concept", "script", "storyboard"] as const) {
-    const imported = await workflow.importArtifact(created.manifest.taskId, {
-      stage,
-      sourceFiles: [source],
+    const imported = await workflow.generateStage(created.manifest.taskId, {
       ...(stage === "concept"
         ? {
             rights: {

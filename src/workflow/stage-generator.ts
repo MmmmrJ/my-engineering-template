@@ -33,6 +33,12 @@ export interface StageGenerator {
  */
 export class DefaultStageGenerator implements StageGenerator {
   generate(request: StageGenerationRequest): Promise<GeneratedStageDraft> {
+    if (request.feedback?.trim()) {
+      throw new WorkflowError(
+        "GENERATOR_UNAVAILABLE",
+        `The deterministic baseline generator cannot faithfully apply revision feedback for ${request.stage}; import a complete replacement contract or configure a feedback-capable StageGenerator.`,
+      );
+    }
     switch (request.stage) {
       case "concept":
         return Promise.resolve(conceptDraft(request));

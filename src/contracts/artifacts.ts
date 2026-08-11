@@ -106,6 +106,7 @@ export interface ArtifactRecord {
   bytes: number;
   sha256: string;
   providerId?: string;
+  providerAttemptId?: string;
   model?: string;
   jobId?: string;
   promptHash?: string;

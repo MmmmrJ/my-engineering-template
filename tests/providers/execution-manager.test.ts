@@ -314,7 +314,15 @@ describe("ProviderExecutionManager", () => {
     const signedUrl = "https://assets.example/frame.png?signature=must-not-persist";
     const adapter = outputAdapter({
       submitState: "succeeded",
-      submitOutputs: [{ kind: "image", uri: signedUrl }],
+      model: "observed-model-v1",
+      jobMetadata: { requestId: "request-1", internalNote: "drop-me" },
+      submitOutputs: [
+        {
+          kind: "image",
+          uri: signedUrl,
+          metadata: { seed: 42, resourceId: "resource-1", internalNote: "drop-me" },
+        },
+      ],
     });
     const manager = new ProviderExecutionManager(new ProviderRegistry([adapter]), root, {
       downloadFetch: async () =>
@@ -326,7 +334,10 @@ describe("ProviderExecutionManager", () => {
 
     const { attempt, job } = await manager.submitConfirmed(
       "remote",
-      { capability: "image.generate", input: { prompt: "archive me" } },
+      {
+        capability: "image.generate",
+        input: { prompt: "archive me", seed: 77, width: 1080, internalNote: "drop-me" },
+      },
       confirmedContext("keyframes"),
     );
 
@@ -340,10 +351,17 @@ describe("ProviderExecutionManager", () => {
     expect(await readFile(job.outputs?.[0]?.localPath ?? "")).toEqual(onePixelPng);
     expect(await readFile(job.outputs?.[0]?.archivedPath ?? "")).toEqual(onePixelPng);
     expect(attempt.state).toBe("succeeded");
+    expect(attempt).toMatchObject({
+      observedModel: "observed-model-v1",
+      requestMetadata: { seed: 77, width: 1080 },
+      jobMetadata: { requestId: "request-1" },
+      outputs: [{ metadata: { seed: 42, resourceId: "resource-1" } }],
+    });
     const ledger = await readFile(join(root, "provider-jobs.jsonl"), "utf8");
     expect(ledger).not.toContain("assets.example");
     expect(ledger).not.toContain("must-not-persist");
     expect(ledger).not.toContain('"uri"');
+    expect(ledger).not.toContain("drop-me");
   });
 
   it.each([403, 410])(
@@ -752,6 +770,8 @@ function outputAdapter(options: {
   submitOutputs?: ProviderJob["outputs"];
   pollState?: ProviderJob["state"];
   pollOutputs?: ProviderJob["outputs"];
+  model?: string;
+  jobMetadata?: ProviderJob["metadata"];
 }): ProviderAdapter {
   const job = (
     state: ProviderJob["state"],
@@ -764,6 +784,8 @@ function outputAdapter(options: {
     state,
     submittedAt: "2026-08-10T00:00:00.000Z",
     updatedAt: "2026-08-10T00:00:01.000Z",
+    ...(options.model ? { model: options.model } : {}),
+    ...(options.jobMetadata ? { metadata: options.jobMetadata } : {}),
     ...(outputs ? { outputs } : {}),
   });
   return {

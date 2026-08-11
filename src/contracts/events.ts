@@ -63,6 +63,10 @@ export interface ProviderSelectedEvent extends WorkflowEventBase {
   metadata?: Readonly<Record<string, unknown>>;
 }
 
+export interface ProviderProfileFrozenEvent extends WorkflowEventBase {
+  type: "provider.profile_frozen";
+}
+
 export interface StageInvalidatedEvent extends WorkflowEventBase {
   type: "stage.invalidated";
   stage: WorkflowStage;
@@ -83,6 +87,7 @@ export type WorkflowEvent =
   | ReviewRecordedEvent
   | RevisionRequestedEvent
   | ProviderSelectedEvent
+  | ProviderProfileFrozenEvent
   | StageInvalidatedEvent
   | TaskExportedEvent;
 

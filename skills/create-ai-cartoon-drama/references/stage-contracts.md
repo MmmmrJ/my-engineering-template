@@ -2,7 +2,7 @@
 
 Meet the minimum contract below before requesting review. Keep stable character, location, prop, shot, and revision IDs across stages.
 
-Persist the matching `schemaVersion: 1` structured `stageContract` with every revision. The runtime validates required fields, stable-ID coverage, durations, upstream references, imported file names and file roles, automatic review/QC results, and blocking issues before it creates a reviewable revision. Primary asset, keyframe, clip, dialogue, music, and SFX entries must use distinct files; contact sheets, proxy assemblies, reports, subtitles, and timelines must use their declared media/document formats rather than reusing a primary file.
+Persist the matching `schemaVersion: 1` structured `stageContract` with every revision. The runtime validates required fields, stable-ID coverage, durations, upstream references, imported file names and file roles, automatic review/QC results, and blocking issues before it creates a reviewable revision. Primary asset, keyframe, clip, dialogue, narration, music, and SFX entries must use distinct files; contact sheets, proxy assemblies, reports, subtitles, and timelines must use their declared media/document formats rather than reusing a primary file. When imported sources reuse a basename, supply metadata `fileNames` keyed by source path and reference its unique logical values in the contract.
 
 ## `concept`
 
@@ -40,14 +40,14 @@ Persist the matching `schemaVersion: 1` structured `stageContract` with every re
 
 ## `clips`
 
-- Supply one traceable motion result for every approved shot or an explicit documented exception.
+- Supply one traceable motion result for every approved shot or an explicit documented no-file exception; exceptions cannot claim a passing technical result.
 - Match planned duration, action, camera intent, start/end anchors, frame rate, and continuity.
 - Reject severe morphing, extra limbs, text artifacts, flicker, or unusable handles.
 - Provide a proxy assembly and per-clip technical inspection report.
 
 ## `audio`
 
-- Supply dialogue/narration, music, SFX, timing, mix decisions, and `zh-CN` subtitle content.
+- Supply exact speaking-character dialogue coverage, an explicit narration voice when narration exists, optional music/SFX cues, timing, mix decisions, and `zh-CN` subtitle content.
 - Prefer synthetic catalog voices or recordings with documented rights. Voice cloning remains disabled unless the audio artifact is explicitly marked, contains the subject, scope, separate authorization evidence/time, and a later user-confirmation statement/time (plus review event ID when available).
 - Check pronunciation, intelligibility, loudness balance, sync, and music/SFX licenses.
 - Provide a dialogue/voice map, music and SFX cue sheet, and mixed preview.

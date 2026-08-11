@@ -20,17 +20,17 @@ Run the stages in order. Strict mode ends every stage in a user decision. Explic
 
 1. Inspect: `npm run cartoon -- status <task-id>`.
 2. For G1-G3, run `cartoon generate`; otherwise author or generate the current structured contract.
-3. Import external files with metadata when the CLI did not create them.
+3. Import successful provider outputs with `providers import-output --attempt`; use ordinary `import` only for non-job external files. Supply rights for every file.
 4. Show evidence to the user and wait.
 5. Record exactly one decision through `review`.
 6. Apply feedback to the named targets.
-7. Run `resume` and follow its one returned action. Resume or poll an existing provider attempt, or import its already archived outputs, before considering any new paid request.
+7. Run `resume` and follow its one returned action. Resume, poll, or cancel an obsolete provider attempt, or import its already archived outputs, before considering any new paid request.
 
 An interrupted task must resume from recorded state. Do not reconstruct approvals from chat history or rerun already approved stages unless the user explicitly invalidates them.
 
-`resume-provider-job` reuses the exact request hash, confirmation, and idempotency key. `poll-provider-job` never asks for a new cost confirmation. `import-provider-output` points only to task-local archived files and must be completed with the current stage contract before review.
+`resume-provider-job` reuses the exact request hash, confirmation, and idempotency key. `poll-provider-job` never asks for a new cost confirmation. `cancel-provider-job` prevents an attempt prepared for an obsolete revision from being reused. `import-provider-output` points only to existing task-local archived files and must be completed with the current stage contract before review. It may return several `attemptIds`; repeat `--attempt` so all complete output sets enter one atomic revision, and use metadata `fileNames` when generic archive basenames collide.
 
-For a manual platform attempt, never write `*.result.json` by hand. Complete it through `cartoon providers complete-manual <task-id> --attempt <attempt-id> --result @result.json`; the command checks the exported files, archives them inside the task, updates the provider ledger, and lets the next `resume` return `import-provider-output`.
+For a manual platform attempt, never write `*.result.json` by hand. Complete it through `cartoon providers complete-manual <task-id> --attempt <attempt-id> --result @result.json`; the command checks the exported files, archives them inside the task, updates the provider ledger, and lets the next `resume` return `import-provider-output`. Fulfill that action with `cartoon providers import-output <task-id> --attempt <attempt-id> [--attempt <attempt-id> ...] --contract @stage-contract.json --metadata @metadata.json`.
 
 ## Provider checkpoint
 

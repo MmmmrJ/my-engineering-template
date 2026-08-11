@@ -70,6 +70,11 @@ export interface ProviderBinding {
   metadata?: Readonly<Record<string, unknown>>;
 }
 
+export interface ProviderProfileFreeze {
+  frozenAt: string;
+  frozenByEventId: string;
+}
+
 
 export type ProviderSelection = ProviderBinding;
 
@@ -103,6 +108,8 @@ export interface TaskState {
   stages: Record<WorkflowStage, StageState>;
   artifacts: Record<string, ArtifactRecord>;
   providers: Partial<Record<ProviderCapability, ProviderBinding>>;
+  /** Absent on legacy tasks; a complete legacy required map is treated as implicitly frozen. */
+  providerProfileFreeze?: ProviderProfileFreeze;
   policies: {
     review: {
       mode: ReviewMode;
@@ -187,6 +194,15 @@ export type ResumeAction =
       state: "prepared" | "queued" | "running" | "failed_retryable";
     }
   | {
+      type: "cancel-provider-job";
+      attemptId: string;
+      providerId: string;
+      capability: ProviderCapability;
+      stage: WorkflowStage;
+      state: "prepared" | "queued" | "running" | "failed_retryable";
+      reason: "obsolete-revision";
+    }
+  | {
       type: "import-provider-output";
       attemptId: string;
       providerId: string;
@@ -194,6 +210,7 @@ export type ResumeAction =
       stage: WorkflowStage;
       jobId?: string;
       files: readonly string[];
+      attemptIds?: readonly string[];
     }
   | { type: "export" }
   | { type: "stopped"; reason: "cancelled" | "failed" };
